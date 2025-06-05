@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/wesleyribeirobarbosa/mesh-geo-planner#readme",
   "dependencies": {
+    "fs": "^0.0.1-security",
     "rbush": "^4.0.1",
     "xlsx": "^0.18.5"
   }

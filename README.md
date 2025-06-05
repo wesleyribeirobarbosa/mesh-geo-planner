@@ -1,21 +1,27 @@
-# mesh-geo-planner
-Otimização de Posicionamento de Concentradores para Redes Mesh
-# Otimização de Posicionamento de Concentradores para Redes Mesh Wi-SUN
+# 🎯 Mesh Geo Planner
+
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.14.0-blue.svg)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+> Otimização de Posicionamento de Concentradores para Redes Mesh Wi-SUN
 
 ## 📋 Sobre o Projeto
 
 Este projeto implementa uma solução escalável para otimizar o posicionamento de concentradores em uma rede mesh Wi-SUN para iluminação pública. A solução utiliza dados de postes georreferenciados fornecidos em arquivos CSV ou XLSX.
 
-### Características Principais
-- Suporte para milhões de postes
-- Restrição de até 250 dispositivos por concentrador
-- Máximo de 15 saltos por dispositivo
-- Aceita coordenadas com ponto (.) ou vírgula (,)
-- Logs detalhados de progresso
-- Compatibilidade com rbush@^3.0.1
-- Normalização robusta de coordenadas
-- Validação de dados para evitar postes inválidos
-- Melhorias na inicialização k-means++ para coordenadas duplicadas
+### ✨ Características Principais
+
+- ✅ Suporte para milhões de postes
+- 🔄 Restrição de até 250 dispositivos por concentrador
+- 🔢 Máximo de 15 saltos por dispositivo
+- 🌍 Aceita coordenadas com ponto (.) ou vírgula (,)
+- 📝 Logs detalhados de progresso
+- 🔧 Compatibilidade com rbush@^3.0.1
+- 🛡️ Normalização robusta de coordenadas
+- ✅ Validação de dados para evitar postes inválidos
+- 🎯 Melhorias na inicialização k-means++ para coordenadas duplicadas
+- ⚙️ Configuração via arquivo JSON
+- 📊 Geração de relatório de resumo com alertas e detecção de redes isoladas
 
 ## 🎯 Objetivo
 
@@ -24,21 +30,50 @@ Determinar as posições ideais (latitude e longitude) dos concentradores em uma
 ## 📦 Requisitos
 
 ### Dependências
-- Node.js: Versão 22.14.0 (testada)
-- Pacotes npm:
-  - xlsx: Manipulação de arquivos XLSX/CSV
-  - rbush@^3.0.1: Índice espacial R-tree para consultas de vizinhança eficiente
+
+- **Node.js**: Versão 22.14.0 (testada)
+- **Pacotes npm**:
+  - `xlsx`: Manipulação de arquivos XLSX/CSV
+  - `rbush@^3.0.1`: Índice espacial R-tree para consultas de vizinhança eficiente
 
 ### Instalação
+
 ```bash
 npm install xlsx rbush@^3.0.1
 ```
 
 ## 🚀 Como Usar
 
-### 1. Preparar o Arquivo de Entrada
+### 1. Configuração
+
+Crie um arquivo `config.json` na raiz do projeto para definir os parâmetros do algoritmo:
+
+```json
+{
+    "maxDevicesPerConcentrator": 250,
+    "maxHops": 15,
+    "hopDistance": 150,
+    "maxConcentrators": null,
+    "maxIterations": 10
+}
+```
+
+#### Parâmetros de Configuração
+
+| Parâmetro | Descrição | Padrão |
+|-----------|-----------|---------|
+| `maxDevicesPerConcentrator` | Número máximo de dispositivos por concentrador | 250 |
+| `maxHops` | Número máximo de saltos permitidos | 15 |
+| `hopDistance` | Distância máxima (metros) para vizinhos | 150 |
+| `maxConcentrators` | Número máximo de concentradores | null |
+| `maxIterations` | Número máximo de iterações K-Medoids | 10 |
+
+> **Nota sobre maxConcentrators**: Se definido, o algoritmo respeita o limite de concentradores, ajustando dinamicamente o número máximo de dispositivos por concentrador se necessário.
+
+### 2. Preparar o Arquivo de Entrada
 
 Crie um arquivo `posts.xlsx` ou `posts.csv` com as seguintes colunas:
+
 - `id`: Identificador único do poste (string)
 - `lat`: Latitude em graus decimais (número ou string, aceita . ou ,)
 - `lng`: Longitude em graus decimais (número ou string, aceita . ou ,)
@@ -51,23 +86,35 @@ P2,-23.5510,-46.6340
 P3,-23.5490,-46.6320
 ```
 
-**Nota**: Evite linhas vazias, colunas faltantes, valores nulos ou coordenadas duplicadas.
+> ⚠️ **Importante**: Evite linhas vazias, colunas faltantes, valores nulos ou coordenadas duplicadas.
 
-### 2. Execução
+### 3. Execução
 
 1. Salve o código em `gw_position_planner.js`
-2. Execute:
+2. Certifique-se de que o arquivo `config.json` está configurado
+3. Execute:
 ```bash
 node gw_position_planner.js
 ```
 
-### 3. Saída
+### 4. Saída
 
-Um arquivo `concentrators.xlsx` será gerado com as seguintes colunas:
-- `concentrator_id`: Identificador do concentrador (ex: C1, C2)
-- `lat`: Latitude do concentrador (formato com ponto)
-- `lng`: Longitude do concentrador (formato com ponto)
-- `assigned_posts`: Lista de IDs dos postes atribuídos, separados por vírgula
+O programa gera dois arquivos:
+
+#### concentrators.xlsx
+Contém as coordenadas dos concentradores e os postes atribuídos:
+- `concentrator_id`
+- `lat`
+- `lng`
+- `assigned_posts` (IDs dos postes separados por vírgula)
+
+#### summary.txt
+Resumo textual com:
+- Número de concentradores estimados
+- Média de dispositivos por concentrador
+- Coordenadas duplicadas encontradas
+- Alertas sobre problemas
+- Redes isoladas detectadas
 
 ## 🛠️ Funcionamento
 
@@ -84,105 +131,25 @@ Um arquivo `concentrators.xlsx` será gerado com as seguintes colunas:
    - Detecção de duplicatas
 
 3. **Algoritmo K-Medoids**
-   - **Conceitos Fundamentais**
-     - **Medoide**: No contexto deste projeto, um medoide é um poste real que atua como concentrador (gateway) em uma rede mesh. Diferente do centroide (ponto médio) usado no k-means tradicional, o medoide é sempre um poste existente, o que garante que a solução seja fisicamente viável. Por exemplo, se temos um cluster com 200 postes, o medoide será um desses 200 postes, escolhido por ser o que minimiza a soma total das distâncias para todos os outros postes do cluster.
+   - Inicialização inteligente (k-means++)
+   - Atribuição de clusters
+   - Refinamento dos medoides
+   - Verificação de restrições
 
-     - **Cluster**: Um grupo de postes que se comunicam através de um mesmo concentrador (medoide). Cada cluster deve respeitar as restrições de:
-       - Máximo de 250 postes
-       - Máximo de 15 saltos entre qualquer poste e o concentrador
-       - Distância máxima de 150 metros entre postes conectados
-
-     - **k-means++**: É uma técnica de inicialização inteligente que escolhe os medoides iniciais de forma mais eficiente que a seleção puramente aleatória. No nosso caso:
-       - O primeiro medoide é escolhido aleatoriamente
-       - Os próximos medoides são escolhidos com probabilidade proporcional ao quadrado da distância ao medoide mais próximo
-       - Isso garante uma distribuição mais uniforme dos concentradores na área
-
-   - **Processo de Otimização**
-     - **Fase 1: Inicialização**
-       - Validação dos postes: verifica se cada poste tem ID único e coordenadas válidas
-       - Detecção de duplicatas: identifica postes com coordenadas idênticas
-       - Seleção inicial dos medoides usando k-means++
-       - Logs detalhados do processo de seleção
-
-     - **Fase 2: Atribuição de Clusters**
-       - Cada poste é atribuído ao medoide mais próximo
-       - A distância é calculada usando a fórmula de Haversine, que considera a curvatura da Terra
-       - O processo é otimizado usando uma estrutura de dados espacial (R-tree)
-       - Progresso é monitorado e reportado a cada 10.000 postes
-
-     - **Fase 3: Refinamento dos Medoides**
-       - Para cada cluster:
-         1. Calcula a soma das distâncias de cada poste para todos os outros postes do cluster
-         2. Seleciona o poste que minimiza essa soma como novo medoide
-       - O processo é repetido até que os medoides não mudem mais
-       - Cada iteração é registrada com logs detalhados
-
-     - **Fase 4: Verificação de Restrições**
-       - **Capacidade**:
-         - Verifica se cada cluster tem no máximo 250 postes
-         - Se excedido, o número de clusters (k) é incrementado
-       
-       - **Conectividade**:
-         - Modela a rede como um grafo onde:
-           - Vértices são os postes
-           - Arestas conectam postes a até 150 metros
-         - Usa Busca em Largura (BFS) para calcular o número de saltos
-         - Verifica se todos os postes estão a no máximo 15 saltos do medoide
-       
-       - **Ajuste Automático**:
-         - Se alguma restrição é violada, o algoritmo:
-           1. Incrementa o número de clusters (k)
-           2. Reinicia o processo de otimização
-           3. Continua até que todas as restrições sejam atendidas
-
-   - **Otimizações Implementadas**
-     - **Índice Espacial (R-tree)**:
-       - Organiza os postes em uma estrutura hierárquica
-       - Permite encontrar vizinhos próximos de forma eficiente
-       - Reduz a complexidade de O(n²) para O(n log n)
-
-     - **Processamento Paralelo**:
-       - A verificação de saltos é distribuída em múltiplas threads
-       - Cada cluster é verificado independentemente
-       - Melhora significativamente a performance em grandes conjuntos de dados
-
-     - **Processamento em Lotes**:
-       - Os postes são processados em grupos de 10.000
-       - Evita sobrecarga de memória
-       - Permite monitoramento do progresso
-
-   - **Métricas de Qualidade**
-     - **Eficiência da Rede**:
-       - Número mínimo de concentradores necessários
-       - Distribuição equilibrada dos postes
-       - Minimização da distância total
-
-     - **Viabilidade Técnica**:
-       - Respeito às restrições de capacidade
-       - Garantia de conectividade
-       - Consideração da topologia mesh
-
-     - **Escalabilidade**:
-       - Suporte a milhões de postes
-       - Performance otimizada
-       - Uso eficiente de recursos
-
-4. **Verificação de Restrições**
-   - Capacidade (250 postes)
-   - Saltos (máximo 15)
-   - Distância (150m por salto)
-
-5. **Geração de Saída**
-   - Criação do arquivo XLSX
-   - Log: "Arquivo de saída gerado"
+4. **Otimizações**
+   - Índice Espacial (R-tree)
+   - Processamento Paralelo
+   - Processamento em Lotes
 
 ## 📊 Métricas Wi-SUN
 
-- **Capacidade**: 250 dispositivos/concentrador
-- **Saltos**: Máximo 15
-- **Cobertura**: 2250m (15 * 150m)
-- **Escalabilidade**: Suporte a milhões de postes
-- **Robustez**: Validação e detecção de erros
+| Métrica | Valor Padrão |
+|---------|--------------|
+| Capacidade | 250 dispositivos/concentrador |
+| Saltos | Máximo 15 |
+| Cobertura | 2250m (15 * 150m) |
+| Escalabilidade | Milhões de postes |
+| Robustez | Validação e detecção de erros |
 
 ## ⚠️ Limitações
 
@@ -191,29 +158,25 @@ Um arquivo `concentrators.xlsx` será gerado com as seguintes colunas:
 - Não considera obstáculos físicos
 - Resultados variam entre execuções (k-means++)
 - Coordenadas duplicadas podem afetar inicialização
+- Redes isoladas podem indicar problemas de conectividade
 
 ## 🔧 Solução de Problemas
 
 ### Erros Comuns
 
-1. **"Falha ao selecionar medoide X/K"**
-   - **Causa**: Coordenadas duplicadas ou poucos postes
-   - **Solução**: Verifique logs e consolide duplicatas
-
-2. **"Poste indefinido" ou "falta id, lat ou lng"**
-   - **Causa**: Dados inválidos no arquivo
-   - **Solução**: Verifique formato do arquivo
-
-3. **Erros RBush**
-   - **Causa**: Incompatibilidade de versão
-   - **Solução**: Instale rbush@^3.0.1
+| Erro | Causa | Solução |
+|------|-------|----------|
+| "Falha ao selecionar medoide X/K" | Coordenadas duplicadas ou poucos postes | Verifique logs e consolide duplicatas |
+| "Poste indefinido" ou "falta id, lat ou lng" | Dados inválidos no arquivo | Verifique formato do arquivo |
+| Erros RBush | Incompatibilidade de versão | Instale rbush@^3.0.1 |
+| "Erro ao carregar config.json" | Arquivo ausente ou inválido | Crie ou corrija o arquivo config.json |
 
 ## 🔮 Melhorias Futuras
 
-- Modelagem de interferências
-- Suporte para redundância
-- Inclusão de altimetria
-- Visualização geográfica
+- [ ] Modelagem de interferências
+- [ ] Suporte para redundância
+- [ ] Inclusão de altimetria
+- [ ] Visualização geográfica
 
 ## 📚 Referências
 
@@ -223,6 +186,4 @@ Um arquivo `concentrators.xlsx` será gerado com as seguintes colunas:
 - Arthur & Vassilvitskii (2007): "k-means++: The Advantages of Careful Seeding"
 - Guttman (1984): "R-trees: A Dynamic Index Structure"
 - Signify Smart Lighting: Práticas de otimização
-
-
 

@@ -1,6 +1,31 @@
 const XLSX = require('xlsx');
 const RBush = require('rbush');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
+const fs = require('fs');
+
+// Função para carregar configurações do arquivo JSON
+function loadConfig() {
+    try {
+        const configData = fs.readFileSync('config.json', 'utf8');
+        const config = JSON.parse(configData);
+        return {
+            maxDevicesPerConcentrator: config.maxDevicesPerConcentrator || 250,
+            maxHops: config.maxHops || 15,
+            hopDistance: config.hopDistance || 150,
+            maxConcentrators: config.maxConcentrators || null,
+            maxIterations: config.maxIterations || 10
+        };
+    } catch (error) {
+        console.warn(`Erro ao carregar config.json: ${error.message}. Usando valores padrão.`);
+        return {
+            maxDevicesPerConcentrator: 250,
+            maxHops: 15,
+            hopDistance: 150,
+            maxConcentrators: null,
+            maxIterations: 10
+        };
+    }
+}
 
 // Função para normalizar coordenadas (aceita . ou , como separador decimal)
 function normalizeCoordinate(value) {
@@ -35,7 +60,6 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
 function buildSpatialIndex(posts) {
     console.log('Construindo índice espacial (R-tree)...');
     try {
-        console.log('Tipo de RBush:', typeof RBush);
         const RBushFactory = RBush.default || RBush;
         if (typeof RBushFactory !== 'function') {
             throw new Error('RBush não é uma função ou construtor. Verifique a versão instalada (necessário rbush@^3.0.1).');
@@ -57,7 +81,7 @@ function buildSpatialIndex(posts) {
 }
 
 // Função para verificar saltos usando BFS (executada em worker)
-function checkHops(posts, concentrator, maxHops = 15, hopDistance = 150) {
+function checkHops(posts, concentrator, config) {
     console.log(`Verificando saltos para concentrador ${concentrator.id} (${posts.length} postes)...`);
     const graph = {};
     posts.forEach(post => graph[post.id] = []);
@@ -68,13 +92,13 @@ function checkHops(posts, concentrator, maxHops = 15, hopDistance = 150) {
             console.log(`Construindo grafo: ${((index / posts.length) * 100).toFixed(1)}% concluído`);
         }
         const neighbors = tree.search({
-            minX: post.lng - 0.0027, // ~150m em longitude
+            minX: post.lng - 0.0027,
             maxX: post.lng + 0.0027,
-            minY: post.lat - 0.00135, // ~150m em latitude
+            minY: post.lat - 0.00135,
             maxY: post.lat + 0.00135
         }).filter(n => {
             const neighbor = posts[n.index];
-            return neighbor.id !== post.id && haversineDistance(post.lat, post.lng, neighbor.lat, neighbor.lng) <= hopDistance;
+            return neighbor.id !== post.id && haversineDistance(post.lat, post.lng, neighbor.lat, neighbor.lng) <= config.hopDistance;
         }).map(n => posts[n.index].id);
         graph[post.id] = neighbors;
     });
@@ -90,7 +114,7 @@ function checkHops(posts, concentrator, maxHops = 15, hopDistance = 150) {
             if (!visited.has(neighbor)) {
                 visited.add(neighbor);
                 distances[neighbor] = distances[current] + 1;
-                if (distances[neighbor] <= maxHops) {
+                if (distances[neighbor] <= config.maxHops) {
                     queue.push(neighbor);
                 }
             }
@@ -102,22 +126,22 @@ function checkHops(posts, concentrator, maxHops = 15, hopDistance = 150) {
 }
 
 // Worker para verificar saltos em paralelo
-function runWorker(posts, concentrator) {
+function runWorker(posts, concentrator, config) {
     return new Promise((resolve) => {
-        const worker = new Worker(__filename, { workerData: { posts, concentrator } });
+        const worker = new Worker(__filename, { workerData: { posts, concentrator, config } });
         worker.on('message', resolve);
         worker.on('error', (err) => resolve({ error: err.message }));
     });
 }
 
 if (!isMainThread) {
-    const distances = checkHops(workerData.posts, workerData.concentrator);
+    const distances = checkHops(workerData.posts, workerData.concentrator, workerData.config);
     parentPort.postMessage(distances);
     process.exit();
 }
 
-// K-Medoids com inicialização k-means++
-function kMedoids(posts, k) {
+// K-Medoids com inicialização k-means++ e limite de iterações
+function kMedoids(posts, k, config) {
     console.log(`Iniciando K-Medoids com ${k} clusters...`);
 
     // Inicialização k-means++
@@ -166,7 +190,6 @@ function kMedoids(posts, k) {
                     break;
                 }
             }
-            // Fallback: select last post if loop fails (handles numerical precision issues)
             if (!selectedPost && distances.length > 0) {
                 console.warn(`Falha na seleção por soma de distâncias para medoide ${i + 1}/${k}. Usando último poste válido.`);
                 selectedPost = distances[distances.length - 1].post;
@@ -184,7 +207,7 @@ function kMedoids(posts, k) {
     let clusters = [];
     let changed = true;
     let iteration = 0;
-    while (changed) {
+    while (changed && iteration < config.maxIterations) {
         iteration++;
         console.log(`K-Medoids: Iniciando iteração ${iteration}...`);
         changed = false;
@@ -241,9 +264,61 @@ function kMedoids(posts, k) {
     return { medoids, clusters };
 }
 
+// Função para gerar arquivo de resumo
+function generateSummary(posts, medoids, clusters, config, coordMap) {
+    const summary = [];
+    const numConcentrators = medoids.length;
+    const avgDevices = (posts.length / numConcentrators).toFixed(2);
+    const duplicatedCoords = Array.from(coordMap.entries()).filter(([_, ids]) => ids.length > 1);
+
+    summary.push(`Resumo da Otimização de Concentradores`);
+    summary.push(`-------------------------------------`);
+    summary.push(`Número de concentradores estimados: ${numConcentrators}`);
+    summary.push(`Média de dispositivos por concentrador: ${avgDevices}`);
+    summary.push(`Coordenadas duplicadas encontradas: ${duplicatedCoords.length}`);
+    if (duplicatedCoords.length > 0) {
+        summary.push(`Detalhes das coordenadas duplicadas:`);
+        duplicatedCoords.forEach(([key, ids]) => {
+            summary.push(`  Coordenadas (${key}): ${ids.length} postes (${ids.join(', ')})`);
+        });
+    }
+
+    const alerts = [];
+    if (config.maxConcentrators && numConcentrators > config.maxConcentrators) {
+        alerts.push(`Número máximo de concentradores (${config.maxConcentrators}) não respeita a métrica de número máximo de dispositivos por concentrador (${config.maxDevicesPerConcentrator}).`);
+    }
+    const dynamicMaxDevices = config.maxConcentrators ? Math.ceil(posts.length / config.maxConcentrators) : config.maxDevicesPerConcentrator;
+    if (dynamicMaxDevices > config.maxDevicesPerConcentrator) {
+        alerts.push(`Número máximo de dispositivos por concentrador ajustado para ${dynamicMaxDevices} devido ao limite de ${config.maxConcentrators} concentradores.`);
+    }
+
+    const clusterSizes = clusters.map(cluster => cluster.length);
+    const avgClusterSize = clusterSizes.reduce((sum, size) => sum + size, 0) / clusterSizes.length;
+    const isolatedClusters = clusters
+        .map((cluster, index) => ({ index: index + 1, size: cluster.length }))
+        .filter(cluster => cluster.size < avgClusterSize * 0.5);
+
+    if (isolatedClusters.length > 0) {
+        alerts.push(`Redes isoladas detectadas (${isolatedClusters.length}):`);
+        isolatedClusters.forEach(cluster => {
+            alerts.push(`  Cluster ${cluster.index} com ${cluster.size} dispositivos (muito abaixo da média de ${avgClusterSize.toFixed(2)})`);
+        });
+    }
+
+    if (alerts.length > 0) {
+        summary.push(`Alertas:`);
+        alerts.forEach(alert => summary.push(`  ${alert}`));
+    }
+
+    fs.writeFileSync('summary.txt', summary.join('\n'));
+    console.log('Arquivo de resumo gerado: summary.txt');
+}
+
 // Função principal
 async function optimizeConcentrators(inputFile, outputFile) {
     console.log(`Iniciando otimização de concentradores com arquivo ${inputFile}...`);
+    const config = loadConfig();
+    console.log('Configurações carregadas:', config);
 
     console.log('Lendo arquivo de entrada...');
     const workbook = XLSX.readFile(inputFile, { sheetRows: 100000 });
@@ -303,36 +378,40 @@ async function optimizeConcentrators(inputFile, outputFile) {
         throw new Error('Arquivo contém postes com colunas inválidas: id, lat, lng devem estar presentes e ser válidos.');
     }
 
-    let k = Math.ceil(posts.length / 250);
-    console.log(`Número estimado de concentradores: ${k}`);
+    let k = config.maxConcentrators || Math.ceil(posts.length / config.maxDevicesPerConcentrator);
+    console.log(`Número inicial de concentradores: ${k}`);
+    const dynamicMaxDevices = config.maxConcentrators ? Math.ceil(posts.length / config.maxConcentrators) : config.maxDevicesPerConcentrator;
+    if (dynamicMaxDevices > config.maxDevicesPerConcentrator) {
+        console.warn(`Aviso: Com ${config.maxConcentrators} concentradores, o número máximo de dispositivos por concentrador será ajustado para ${dynamicMaxDevices} para acomodar ${posts.length} postes.`);
+    }
 
     console.log('Executando algoritmo K-Medoids...');
-    let { medoids, clusters } = kMedoids(posts, k);
+    let { medoids, clusters } = kMedoids(posts, k, config);
     console.log('K-Medoids concluído.');
 
     console.log('Verificando restrições de capacidade e saltos...');
     let valid = false;
     let iteration = 0;
-    while (!valid) {
+    while (!valid && iteration < config.maxIterations) {
         iteration++;
         console.log(`Verificação de restrições: Iteração ${iteration}`);
         valid = true;
         const checks = await Promise.all(clusters.map(async (cluster, i) => {
             console.log(`Verificando cluster ${i + 1}/${k} (${cluster.length} postes)...`);
-            if (cluster.length > 250) {
-                console.log(`Cluster ${i + 1} excede 250 dispositivos.`);
-                return { index: i, valid: false, reason: 'Excede 250 dispositivos' };
+            if (cluster.length > dynamicMaxDevices) {
+                console.log(`Cluster ${i + 1} excede ${dynamicMaxDevices} dispositivos.`);
+                return { index: i, valid: false, reason: `Excede ${dynamicMaxDevices} dispositivos` };
             }
 
-            const distances = await runWorker(cluster, medoids[i]);
+            const distances = await runWorker(cluster, medoids[i], config);
             if (distances.error) {
                 console.log(`Erro na verificação de saltos para cluster ${i + 1}: ${distances.error}`);
                 return { index: i, valid: false, reason: distances.error };
             }
             for (const post of cluster) {
-                if (!distances[post.id] || distances[post.id] > 15) {
-                    console.log(`Poste ${post.id} excede 15 saltos no cluster ${i + 1}.`);
-                    return { index: i, valid: false, reason: `Poste ${post.id} excede 15 saltos` };
+                if (!distances[post.id] || distances[post.id] > config.maxHops) {
+                    console.log(`Poste ${post.id} excede ${config.maxHops} saltos no cluster ${i + 1}.`);
+                    return { index: i, valid: false, reason: `Poste ${post.id} excede ${config.maxHops} saltos` };
                 }
             }
             console.log(`Cluster ${i + 1} válido.`);
@@ -341,15 +420,22 @@ async function optimizeConcentrators(inputFile, outputFile) {
 
         for (const check of checks) {
             if (!check.valid) {
-                console.log(`Restrição violada: ${check.reason}. Aumentando k para ${k + 1}...`);
-                k++;
-                ({ medoids, clusters } = kMedoids(posts, k));
-                valid = false;
-                break;
+                console.log(`Restrição violada: ${check.reason}.`);
+                if (!config.maxConcentrators || k < config.maxConcentrators) {
+                    console.log(`Aumentando k para ${k + 1}...`);
+                    k++;
+                    ({ medoids, clusters } = kMedoids(posts, k, config));
+                    valid = false;
+                    break;
+                } else {
+                    console.warn(`Não é possível aumentar k além de ${config.maxConcentrators} devido ao limite definido em config.json. Continuando com clusters atuais.`);
+                    valid = true; // Aceitar a solução atual, mesmo com violações
+                    break;
+                }
             }
         }
     }
-    console.log('Todas as restrições atendidas.');
+    console.log('Todas as restrições atendidas ou limite máximo de concentradores alcançado.');
 
     console.log('Gerando arquivo de saída...');
     const outputData = medoids.map((medoid, index) => ({
@@ -364,6 +450,9 @@ async function optimizeConcentrators(inputFile, outputFile) {
     XLSX.utils.book_append_sheet(wb, ws, 'Concentrators');
     XLSX.writeFile(wb, outputFile);
     console.log(`Arquivo de saída gerado: ${outputFile}`);
+
+    console.log('Gerando arquivo de resumo...');
+    generateSummary(posts, medoids, clusters, config, coordMap);
 }
 
 // Executar

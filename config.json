@@ -1,0 +1,7 @@
+{
+    "maxDevicesPerConcentrator": 250,
+    "maxHops": 15,
+    "hopDistance": 150,
+    "maxConcentrators": null,
+    "maxIterations": 5
+}
