@@ -1,0 +1,24 @@
+{
+  "name": "mesh-geo-planner",
+  "version": "1.0.0",
+  "description": "Otimização de Posicionamento de Concentradores para Redes Mesh",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wesleyribeirobarbosa/mesh-geo-planner.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/wesleyribeirobarbosa/mesh-geo-planner/issues"
+  },
+  "homepage": "https://github.com/wesleyribeirobarbosa/mesh-geo-planner#readme",
+  "dependencies": {
+    "rbush": "^4.0.1",
+    "xlsx": "^0.18.5"
+  }
+}
