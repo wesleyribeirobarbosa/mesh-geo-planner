@@ -27,6 +27,7 @@ Este projeto implementa uma solução escalável para otimizar o posicionamento 
 - 🚫 Exclusão de gateways sem postes associados
 - 🔔 Alertas para postes não atribuídos ou violações de capacidade
 - 🌐 Restrição de distância mínima entre gateways para evitar concentrações
+- 📡 Análise de carga máxima de retransmissão por dispositivo
 
 ## 🎯 Objetivo
 
@@ -60,7 +61,8 @@ Crie um arquivo `config.json` na raiz do projeto para definir os parâmetros do 
     "hopDistance": 150,
     "maxGateways": null,
     "maxIterations": 10,
-    "minGatewayDistance": 300
+    "minGatewayDistance": 300,
+    "maxRelayLoad": 50
 }
 ```
 
@@ -74,9 +76,11 @@ Crie um arquivo `config.json` na raiz do projeto para definir os parâmetros do 
 | `maxGateways` | Número máximo de gateways | null |
 | `maxIterations` | Número máximo de iterações K-Medoids | 10 |
 | `minGatewayDistance` | Distância mínima entre gateways (metros) | 300 |
+| `maxRelayLoad` | Número máximo de dispositivos que podem depender de um poste para retransmissão | 50 |
 
 > **Nota sobre maxGateways**: Se definido, o algoritmo respeita o limite de gateways, ajustando dinamicamente o número máximo de dispositivos por gateway se necessário.
 > **Nota sobre minGatewayDistance**: Garante que os gateways estejam a pelo menos a distância especificada uns dos outros, evitando concentrações em áreas pequenas.
+> **Nota sobre maxRelayLoad**: Limita o número de dispositivos que podem depender de um único poste para retransmissão, evitando gargalos na rede e garantindo uma distribuição equilibrada da carga de comunicação.
 
 ### 2. Preparar o Arquivo de Entrada
 
@@ -119,6 +123,10 @@ Contém as coordenadas dos gateways com postes associados:
 Arquivo GeoJSON com uma `FeatureCollection` contendo:
 - Estrutura compatível com Mapbox para visualização com ícones diferenciados
 
+> 💡 **Dica de Visualização**: O arquivo GeoJSON pode ser visualizado diretamente no site [geojson.io](https://geojson.io). Basta copiar o conteúdo do arquivo `output/gateways.geojson` e colar no site. Isso permite uma visualização rápida e interativa dos gateways no mapa.
+
+![Visualização do GeoJSON no geojson.io](image.png)
+
 #### summary.txt
 Resumo textual com:
 - Número total de postes processados
@@ -130,6 +138,9 @@ Resumo textual com:
 - Número de postes atribuídos aos gateways
 - Média de dispositivos por gateway (baseado nos postes atribuídos)
 - Distância mínima entre gateways aplicada
+- Carga máxima de retransmissão configurada
+- Média de carga de retransmissão por poste
+- Postes com carga de retransmissão crítica (>80% do limite)
 - Postes não atribuídos (se houver)
 - Coordenadas duplicadas encontradas (com detalhes)
 - Alertas sobre ajustes de configuração ou violações
@@ -147,6 +158,9 @@ Redução de gateways: 0 gateways foram descartados por não terem postes associ
 Número de postes atribuídos aos gateways: 6464
 Média de dispositivos por gateway (baseado nos postes atribuídos): 248.62
 Distância mínima entre gateways aplicada: 300m
+Carga máxima de retransmissão configurada: 50 dispositivos
+Média de carga de retransmissão por poste: 12.3 dispositivos
+Postes com carga de retransmissão crítica (>80% do limite): 15
 Postes não atribuídos: 0 postes não foram associados a nenhum gateway devido a restrições de capacidade, saltos ou distância mínima.
 Coordenadas duplicadas encontradas: 348
 Detalhes das coordenadas duplicadas:
@@ -220,22 +234,25 @@ O algoritmo segue um processo detalhado para otimizar o posicionamento de gatewa
    - **Por que é importante**: Garante que os gateways sejam posicionados em locais reais (postes), que os postes sejam agrupados de forma otimizada, e que a distribuição espacial seja uniforme.
 
 5. **Verificação de Restrições**
-   - **O que acontece**: Cada cluster é validado para garantir que respeita as restrições de capacidade (máximo de dispositivos por gateway), saltos (máximo de 15 saltos), e distância mínima entre gateways.
+   - **O que acontece**: Cada cluster é validado para garantir que respeita as restrições de capacidade (máximo de dispositivos por gateway), saltos (máximo de 15 saltos), distância mínima entre gateways e carga máxima de retransmissão.
    - **Restrições**:
      - **Capacidade**: Cada cluster deve ter no máximo `maxDevicesPerGateway` postes (padrão: 250). Se `maxGateways` está definido, esse limite pode ser ajustado dinamicamente.
      - **Saltos**: Cada poste no cluster deve estar a no máximo 15 saltos do gateway, com cada salto sendo uma conexão de até 150 metros.
      - **Distância Mínima**: Os gateways devem estar a pelo menos `minGatewayDistance` metros uns dos outros, garantida durante a seleção e refinamento de medoides.
+     - **Carga de Retransmissão**: Cada dispositivo na rede mesh deve respeitar um limite máximo de retransmissões para outros dispositivos. Isso é calculado analisando o grafo de conectividade e contando quantos dispositivos dependem de cada poste para se comunicar com o gateway.
    - **Termos**:
      - **Saltos**: Número de conexões necessárias para um poste se comunicar com o gateway em uma rede mesh. Ex.: Um poste a 300m do gateway, conectado via outro poste a 150m, tem 2 saltos.
      - **BFS (Busca em Largura)**: Algoritmo usado para calcular o número de saltos. Parte do gateway e explora postes vizinhos nível por nível, como uma onda se propagando.
      - **Grafo de Conectividade**: Representação da rede onde postes são nós e conexões (dentro de 150m) são arestas.
+     - **Carga de Retransmissão**: Número de dispositivos que dependem de um determinado poste para se comunicar com o gateway. Um poste com alta carga de retransmissão pode se tornar um gargalo na rede.
    - **Processo**:
      - **Construção do Grafo**: Para cada cluster, cria um grafo onde postes são conectados se estiverem a até 150m (usando R-tree para eficiência).
      - **Verificação de Saltos**: Usa BFS para calcular o número de saltos de cada poste ao gateway. Se algum poste exceder 15 saltos, o cluster é inválido.
+     - **Análise de Carga**: Para cada poste, calcula quantos outros dispositivos dependem dele para se comunicar com o gateway. Se a carga exceder o limite configurado, o algoritmo tenta reorganizar o cluster para distribuir melhor a carga.
      - **Paralelismo**: Cada cluster é verificado em um processo separado (worker) para acelerar a computação.
      - **Ajuste de `k`**: Se algum cluster violar as restrições, o número de gateways (`k`) é aumentado (a menos que `maxGateways` seja atingido), e o K-Medoids é reexecutado.
-   - **Log**: Exibe "Verificando restrições de capacidade e saltos..." com detalhes por cluster.
-   - **Por que é importante**: Garante que a rede mesh seja viável, com todos os postes alcançáveis dentro das especificações Wi-SUN e gateways distribuídos adequadamente.
+   - **Log**: Exibe "Verificando restrições de capacidade, saltos e carga de retransmissão..." com detalhes por cluster.
+   - **Por que é importante**: Garante que a rede mesh seja viável, com todos os postes alcançáveis dentro das especificações Wi-SUN, gateways distribuídos adequadamente e sem sobrecarga de retransmissão em nenhum dispositivo.
 
 6. **Filtragem de Gateways**
    - **O que acontece**: Após o K-Medoids, gateways sem postes associados (clusters vazios) são descartados. Isso ocorre porque o algoritmo pode criar clusters que não atraem postes devido à distribuição geográfica ou restrições de capacidade.
@@ -260,6 +277,10 @@ O algoritmo segue um processo detalhado para otimizar o posicionamento de gatewa
      - Postes atribuídos e não atribuídos.
      - Média de dispositivos por gateway (baseado nos postes atribuídos).
      - Distância mínima entre gateways aplicada.
+     - Carga máxima de retransmissão configurada.
+     - Média de carga de retransmissão por poste.
+     - Postes com carga de retransmissão crítica (>80% do limite).
+     - Postes não atribuídos.
      - Detalhes de coordenadas duplicadas.
      - Alertas sobre limites excedidos ou postes não atribuídos.
    - **Log**: Exibe "Gerando arquivo de saída...", "Gerando arquivo GeoJSON...", e "Gerando arquivo de resumo...".
@@ -279,6 +300,7 @@ O algoritmo segue um processo detalhado para otimizar o posicionamento de gatewa
 | Saltos | Máximo 15 |
 | Cobertura | 2250m (15 * 150m) |
 | Distância Mínima entre Gateways | 300m |
+| Carga Máxima de Retransmissão | 50 dispositivos |
 | Escalabilidade | Milhões de postes |
 | Robustez | Validação e detecção de erros |
 

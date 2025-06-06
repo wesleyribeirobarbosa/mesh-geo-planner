@@ -4,5 +4,6 @@
     "hopDistance": 150,
     "maxGateways": null,
     "maxIterations": 10,
-    "minGatewayDistance": 1000
+    "minGatewayDistance": 1000,
+    "maxRelayLoad": 30
 }

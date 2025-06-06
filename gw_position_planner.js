@@ -2,6 +2,7 @@ const XLSX = require('xlsx');
 const RBush = require('rbush');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const fs = require('fs');
+const path = require('path');
 
 function loadConfig() {
     try {
@@ -14,7 +15,8 @@ function loadConfig() {
             hopDistance: config.hopDistance || 150,
             maxGateways: config.maxGateways || null,
             maxIterations: config.maxIterations || 10,
-            minGatewayDistance: config.minGatewayDistance || 300 // Nova configuração: distância mínima entre gateways em metros
+            minGatewayDistance: config.minGatewayDistance || 300,
+            maxRelayLoad: config.maxRelayLoad || 300 // Nova configuração: carga máxima de retransmissão
         };
     } catch (error) {
         console.warn(`Erro ao carregar config.json: ${error.message}. Usando valores padrão.`);
@@ -24,7 +26,8 @@ function loadConfig() {
             hopDistance: 150,
             maxGateways: null,
             maxIterations: 10,
-            minGatewayDistance: 300 // Valor padrão: 300 metros
+            minGatewayDistance: 300,
+            maxRelayLoad: 300 // Valor padrão: 300
         };
     }
 }
@@ -76,7 +79,7 @@ function buildSpatialIndex(posts) {
 }
 
 function checkHops(posts, gateway, config) {
-    console.log(`Verificando saltos para gateway ${gateway.id} (${posts.length} postes)...`);
+    console.log(`Verificando saltos e carga de retransmissão para gateway ${gateway.id} (${posts.length} postes)...`);
     const graph = {};
     posts.forEach(post => graph[post.id] = []);
 
@@ -101,22 +104,38 @@ function checkHops(posts, gateway, config) {
     const queue = [gateway.id];
     const distances = { [gateway.id]: 0 };
     const visited = new Set([gateway.id]);
+    const relayLoad = {}; // Mapa para rastrear a carga de retransmissão de cada nó
+    posts.forEach(post => relayLoad[post.id] = 0);
 
     while (queue.length > 0) {
         const current = queue.shift();
+        let currentRelayLoad = 0;
         for (const neighbor of graph[current]) {
             if (!visited.has(neighbor)) {
                 visited.add(neighbor);
                 distances[neighbor] = distances[current] + 1;
+                relayLoad[current]++; // Incrementa a carga de retransmissão do nó atual
+                currentRelayLoad++;
                 if (distances[neighbor] <= config.maxHops) {
                     queue.push(neighbor);
                 }
             }
         }
+        if (currentRelayLoad > config.maxRelayLoad && current !== gateway.id) {
+            console.log(`Nó ${current} excede carga de retransmissão (${currentRelayLoad} > ${config.maxRelayLoad}).`);
+            return { distances, valid: false, reason: `Nó ${current} excede carga de retransmissão (${currentRelayLoad} > ${config.maxRelayLoad})` };
+        }
     }
 
-    console.log(`Verificação de saltos concluída para gateway ${gateway.id}.`);
-    return distances;
+    for (const post of posts) {
+        if (!distances[post.id] || distances[post.id] > config.maxHops) {
+            console.log(`Poste ${post.id} excede ${config.maxHops} saltos.`);
+            return { distances, valid: false, reason: `Poste ${post.id} excede ${config.maxHops} saltos` };
+        }
+    }
+
+    console.log(`Verificação de saltos e carga de retransmissão concluída para gateway ${gateway.id}.`);
+    return { distances, valid: true };
 }
 
 function runWorker(posts, gateway, config) {
@@ -128,8 +147,8 @@ function runWorker(posts, gateway, config) {
 }
 
 if (!isMainThread) {
-    const distances = checkHops(workerData.posts, workerData.gateway, workerData.config);
-    parentPort.postMessage(distances);
+    const result = checkHops(workerData.posts, workerData.gateway, workerData.config);
+    parentPort.postMessage(result);
     process.exit();
 }
 
@@ -159,7 +178,7 @@ function kMedoids(posts, k, config) {
             const minDistToMedoids = Math.min(...medoids.map(medoid =>
                 haversineDistance(post.lat, post.lng, medoid.lat, medoid.lng)));
             if (minDistToMedoids < config.minGatewayDistance) {
-                return { post, dist: Infinity }; // Ignora postes muito próximos
+                return { post, dist: Infinity };
             }
             return { post, dist: minDistToMedoids ** 2 };
         }).filter(d => d.dist !== Infinity);
@@ -285,7 +304,18 @@ function kMedoids(posts, k, config) {
     return { medoids, clusters };
 }
 
+// Função para garantir que a pasta output existe
+function ensureOutputDir() {
+    const outputDir = path.join(__dirname, 'output');
+    if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir);
+        console.log('Pasta output criada.');
+    }
+    return outputDir;
+}
+
 function generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount) {
+    const outputDir = ensureOutputDir();
     const summary = [];
     const totalPosts = posts.length;
     const numGatewaysInitial = Math.ceil(validPostsCount / config.maxDevicesPerGateway);
@@ -309,8 +339,9 @@ function generateSummary(posts, outputData, clusters, config, coordMap, validPos
     summary.push(`Número de postes atribuídos aos gateways: ${assignedPostsCount}`);
     summary.push(`Média de dispositivos por gateway (baseado nos postes atribuídos): ${avgDevices}`);
     summary.push(`Distância mínima entre gateways aplicada: ${config.minGatewayDistance}m`);
+    summary.push(`Carga máxima de retransmissão aplicada: ${config.maxRelayLoad}`); // Novo: inclui maxRelayLoad no resumo
     if (unassignedPostsCount > 0) {
-        summary.push(`Postes não atribuídos: ${unassignedPostsCount} postes não foram associados a nenhum gateway devido a restrições de capacidade, saltos ou distância mínima.`);
+        summary.push(`Postes não atribuídos: ${unassignedPostsCount} postes não foram associados a nenhum gateway devido a restrições de capacidade, saltos, carga de retransmissão ou distância mínima.`);
     }
     summary.push(`Coordenadas duplicadas encontradas: ${duplicatedCoords.length}`);
     if (duplicatedCoords.length > 0) {
@@ -337,11 +368,12 @@ function generateSummary(posts, outputData, clusters, config, coordMap, validPos
         alerts.forEach(alert => summary.push(`  ${alert}`));
     }
 
-    fs.writeFileSync('summary.txt', summary.join('\n'));
-    console.log('Arquivo de resumo gerado: summary.txt');
+    fs.writeFileSync(path.join(outputDir, 'summary.txt'), summary.join('\n'));
+    console.log('Arquivo de resumo gerado: output/summary.txt');
 }
 
 function generateGeoJSON(posts, medoids, clusters, coordMap) {
+    const outputDir = ensureOutputDir();
     const features = [];
 
     medoids.forEach((medoid, index) => {
@@ -366,11 +398,12 @@ function generateGeoJSON(posts, medoids, clusters, coordMap) {
         features
     };
 
-    fs.writeFileSync('gateways.geojson', JSON.stringify(geojson, null, 2));
-    console.log('Arquivo GeoJSON gerado: gateways.geojson');
+    fs.writeFileSync(path.join(outputDir, 'gateways.geojson'), JSON.stringify(geojson, null, 2));
+    console.log('Arquivo GeoJSON gerado: output/gateways.geojson');
 }
 
 async function optimizeGateways(inputFile, outputFile) {
+    const outputDir = ensureOutputDir();
     console.log(`Iniciando otimização de gateways com arquivo ${inputFile}...`);
     const config = loadConfig();
     console.log('Lendo arquivo de entrada...');
@@ -450,7 +483,7 @@ async function optimizeGateways(inputFile, outputFile) {
     let { medoids, clusters } = kMedoids(validPosts, k, config);
     console.log('K-Medoids concluído.');
 
-    console.log('Verificando restrições de capacidade e saltos...');
+    console.log('Verificando restrições de capacidade, saltos e carga de retransmissão...');
     let valid = false;
     let iteration = 0;
     while (!valid && iteration < config.maxIterations) {
@@ -464,16 +497,14 @@ async function optimizeGateways(inputFile, outputFile) {
                 return { index: i, valid: false, reason: `Excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length})` };
             }
 
-            const distances = await runWorker(cluster, medoids[i], config);
-            if (distances.error) {
-                console.log(`Erro na verificação de saltos para cluster ${i + 1}: ${distances.error}`);
-                return { index: i, valid: false, reason: distances.error };
+            const result = await runWorker(cluster, medoids[i], config);
+            if (result.error) {
+                console.log(`Erro na verificação para cluster ${i + 1}: ${result.error}`);
+                return { index: i, valid: false, reason: result.error };
             }
-            for (const post of cluster) {
-                if (!distances[post.id] || distances[post.id] > config.maxHops) {
-                    console.log(`Poste ${post.id} excede ${config.maxHops} saltos no cluster ${i + 1}.`);
-                    return { index: i, valid: false, reason: `Poste ${post.id} excede ${config.maxHops} saltos` };
-                }
+            if (!result.valid) {
+                console.log(`Restrição violada no cluster ${i + 1}: ${result.reason}`);
+                return { index: i, valid: false, reason: result.reason };
             }
             console.log(`Cluster ${i + 1} válido.`);
             return { index: i, valid: true };
@@ -510,8 +541,8 @@ async function optimizeGateways(inputFile, outputFile) {
     const ws = XLSX.utils.json_to_sheet(outputData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Gateways');
-    XLSX.writeFile(wb, outputFile);
-    console.log(`Arquivo de saída gerado: ${outputFile} com ${outputData.length} gateways válidos.`);
+    XLSX.writeFile(wb, path.join(outputDir, outputFile));
+    console.log(`Arquivo de saída gerado: output/${outputFile} com ${outputData.length} gateways válidos.`);
 
     console.log('Gerando arquivo GeoJSON...');
     generateGeoJSON(posts, medoids, clusters, coordMap);
