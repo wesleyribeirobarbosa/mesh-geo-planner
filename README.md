@@ -125,7 +125,7 @@ Arquivo GeoJSON com uma `FeatureCollection` contendo:
 
 > 💡 **Dica de Visualização**: O arquivo GeoJSON pode ser visualizado diretamente no site [geojson.io](https://geojson.io). Basta copiar o conteúdo do arquivo `output/gateways.geojson` e colar no site. Isso permite uma visualização rápida e interativa dos gateways no mapa.
 
-![Visualização do GeoJSON no geojson.io](image.png)
+![Visualização do GeoJSON no geojson.io](/assets/image.png)
 
 #### summary.txt
 Resumo textual com:
