@@ -16,7 +16,7 @@ function loadConfig() {
             maxGateways: config.maxGateways || null,
             maxIterations: config.maxIterations || 10,
             minGatewayDistance: config.minGatewayDistance || 300,
-            maxRelayLoad: config.maxRelayLoad || 300 // Nova configuração: carga máxima de retransmissão
+            maxRelayLoad: config.maxRelayLoad || 300
         };
     } catch (error) {
         console.warn(`Erro ao carregar config.json: ${error.message}. Usando valores padrão.`);
@@ -27,7 +27,7 @@ function loadConfig() {
             maxGateways: null,
             maxIterations: 10,
             minGatewayDistance: 300,
-            maxRelayLoad: 300 // Valor padrão: 300
+            maxRelayLoad: 300
         };
     }
 }
@@ -104,7 +104,7 @@ function checkHops(posts, gateway, config) {
     const queue = [gateway.id];
     const distances = { [gateway.id]: 0 };
     const visited = new Set([gateway.id]);
-    const relayLoad = {}; // Mapa para rastrear a carga de retransmissão de cada nó
+    const relayLoad = {};
     posts.forEach(post => relayLoad[post.id] = 0);
 
     while (queue.length > 0) {
@@ -114,7 +114,7 @@ function checkHops(posts, gateway, config) {
             if (!visited.has(neighbor)) {
                 visited.add(neighbor);
                 distances[neighbor] = distances[current] + 1;
-                relayLoad[current]++; // Incrementa a carga de retransmissão do nó atual
+                relayLoad[current]++;
                 currentRelayLoad++;
                 if (distances[neighbor] <= config.maxHops) {
                     queue.push(neighbor);
@@ -304,7 +304,6 @@ function kMedoids(posts, k, config) {
     return { medoids, clusters };
 }
 
-// Função para garantir que a pasta output existe
 function ensureOutputDir() {
     const outputDir = path.join(__dirname, 'output');
     if (!fs.existsSync(outputDir)) {
@@ -339,7 +338,7 @@ function generateSummary(posts, outputData, clusters, config, coordMap, validPos
     summary.push(`Número de postes atribuídos aos gateways: ${assignedPostsCount}`);
     summary.push(`Média de dispositivos por gateway (baseado nos postes atribuídos): ${avgDevices}`);
     summary.push(`Distância mínima entre gateways aplicada: ${config.minGatewayDistance}m`);
-    summary.push(`Carga máxima de retransmissão aplicada: ${config.maxRelayLoad}`); // Novo: inclui maxRelayLoad no resumo
+    summary.push(`Carga máxima de retransmissão aplicada: ${config.maxRelayLoad}`);
     if (unassignedPostsCount > 0) {
         summary.push(`Postes não atribuídos: ${unassignedPostsCount} postes não foram associados a nenhum gateway devido a restrições de capacidade, saltos, carga de retransmissão ou distância mínima.`);
     }
