@@ -1,7 +1,8 @@
 {
-    "maxDevicesPerConcentrator": 250,
+    "maxDevicesPerGateway": 250,
     "maxHops": 15,
     "hopDistance": 150,
-    "maxConcentrators": null,
-    "maxIterations": 5
+    "maxGateways": null,
+    "maxIterations": 10,
+    "minGatewayDistance": 1000
 }

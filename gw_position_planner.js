@@ -3,31 +3,32 @@ const RBush = require('rbush');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const fs = require('fs');
 
-// Função para carregar configurações do arquivo JSON
 function loadConfig() {
     try {
         const configData = fs.readFileSync('config.json', 'utf8');
         const config = JSON.parse(configData);
+        console.log('Configurações carregadas:', config);
         return {
-            maxDevicesPerConcentrator: config.maxDevicesPerConcentrator || 250,
+            maxDevicesPerGateway: config.maxDevicesPerGateway || 250,
             maxHops: config.maxHops || 15,
             hopDistance: config.hopDistance || 150,
-            maxConcentrators: config.maxConcentrators || null,
-            maxIterations: config.maxIterations || 10
+            maxGateways: config.maxGateways || null,
+            maxIterations: config.maxIterations || 10,
+            minGatewayDistance: config.minGatewayDistance || 300 // Nova configuração: distância mínima entre gateways em metros
         };
     } catch (error) {
         console.warn(`Erro ao carregar config.json: ${error.message}. Usando valores padrão.`);
         return {
-            maxDevicesPerConcentrator: 250,
+            maxDevicesPerGateway: 250,
             maxHops: 15,
             hopDistance: 150,
-            maxConcentrators: null,
-            maxIterations: 10
+            maxGateways: null,
+            maxIterations: 10,
+            minGatewayDistance: 300 // Valor padrão: 300 metros
         };
     }
 }
 
-// Função para normalizar coordenadas (aceita . ou , como separador decimal)
 function normalizeCoordinate(value) {
     if (typeof value === 'string') {
         const normalized = value.replace(',', '.');
@@ -43,9 +44,8 @@ function normalizeCoordinate(value) {
     }
 }
 
-// Função para calcular a distância de Haversine (em metros)
 function haversineDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371000; // Raio da Terra em metros
+    const R = 6371000;
     const toRad = (deg) => deg * Math.PI / 180;
     const dLat = toRad(lat2 - lat1);
     const dLon = toRad(lon2 - lon1);
@@ -56,33 +56,27 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
-// Função para construir índice espacial (R-tree)
 function buildSpatialIndex(posts) {
     console.log('Construindo índice espacial (R-tree)...');
-    try {
-        const RBushFactory = RBush.default || RBush;
-        if (typeof RBushFactory !== 'function') {
-            throw new Error('RBush não é uma função ou construtor. Verifique a versão instalada (necessário rbush@^3.0.1).');
-        }
-        const tree = new RBushFactory();
-        const items = posts.map((post, index) => ({
-            minX: post.lng,
-            maxX: post.lng,
-            minY: post.lat,
-            maxY: post.lat,
-            index
-        }));
-        tree.load(items);
-        console.log('Índice espacial construído com sucesso.');
-        return tree;
-    } catch (error) {
-        throw new Error(`Erro ao construir índice espacial: ${error.message}`);
+    const RBushFactory = RBush.default || RBush;
+    if (typeof RBushFactory !== 'function') {
+        throw new Error('RBush não é uma função ou construtor. Verifique a versão instalada (necessário rbush@^3.0.1).');
     }
+    const tree = new RBushFactory();
+    const items = posts.map((post, index) => ({
+        minX: post.lng,
+        maxX: post.lng,
+        minY: post.lat,
+        maxY: post.lat,
+        index
+    }));
+    tree.load(items);
+    console.log('Índice espacial construído com sucesso.');
+    return tree;
 }
 
-// Função para verificar saltos usando BFS (executada em worker)
-function checkHops(posts, concentrator, config) {
-    console.log(`Verificando saltos para concentrador ${concentrator.id} (${posts.length} postes)...`);
+function checkHops(posts, gateway, config) {
+    console.log(`Verificando saltos para gateway ${gateway.id} (${posts.length} postes)...`);
     const graph = {};
     posts.forEach(post => graph[post.id] = []);
 
@@ -104,9 +98,9 @@ function checkHops(posts, concentrator, config) {
     });
     console.log('Grafo de conectividade construído.');
 
-    const queue = [concentrator.id];
-    const distances = { [concentrator.id]: 0 };
-    const visited = new Set([concentrator.id]);
+    const queue = [gateway.id];
+    const distances = { [gateway.id]: 0 };
+    const visited = new Set([gateway.id]);
 
     while (queue.length > 0) {
         const current = queue.shift();
@@ -121,30 +115,26 @@ function checkHops(posts, concentrator, config) {
         }
     }
 
-    console.log(`Verificação de saltos concluída para concentrador ${concentrator.id}.`);
+    console.log(`Verificação de saltos concluída para gateway ${gateway.id}.`);
     return distances;
 }
 
-// Worker para verificar saltos em paralelo
-function runWorker(posts, concentrator, config) {
+function runWorker(posts, gateway, config) {
     return new Promise((resolve) => {
-        const worker = new Worker(__filename, { workerData: { posts, concentrator, config } });
+        const worker = new Worker(__filename, { workerData: { posts, gateway, config } });
         worker.on('message', resolve);
         worker.on('error', (err) => resolve({ error: err.message }));
     });
 }
 
 if (!isMainThread) {
-    const distances = checkHops(workerData.posts, workerData.concentrator, workerData.config);
+    const distances = checkHops(workerData.posts, workerData.gateway, workerData.config);
     parentPort.postMessage(distances);
     process.exit();
 }
 
-// K-Medoids com inicialização k-means++ e limite de iterações
 function kMedoids(posts, k, config) {
     console.log(`Iniciando K-Medoids com ${k} clusters...`);
-
-    // Inicialização k-means++
     console.log('Selecionando medoides iniciais (k-means++)...');
     const medoids = [];
     const validPosts = posts.filter(post => post && post.id && typeof post.lat === 'number' && typeof post.lng === 'number');
@@ -166,20 +156,30 @@ function kMedoids(posts, k, config) {
                 console.warn(`Poste inválido no índice ${index} durante inicialização k-means++. Ignorando...`);
                 return { post, dist: Infinity };
             }
-            const minDist = Math.min(...medoids.map(medoid =>
+            const minDistToMedoids = Math.min(...medoids.map(medoid =>
                 haversineDistance(post.lat, post.lng, medoid.lat, medoid.lng)));
-            return { post, dist: minDist ** 2 };
+            if (minDistToMedoids < config.minGatewayDistance) {
+                return { post, dist: Infinity }; // Ignora postes muito próximos
+            }
+            return { post, dist: minDistToMedoids ** 2 };
         }).filter(d => d.dist !== Infinity);
 
         if (distances.length === 0) {
-            throw new Error(`Nenhum poste válido com distância finita para medoide ${i + 1}/${k}.`);
+            throw new Error(`Nenhum poste válido com distância finita para medoide ${i + 1}/${k} respeitando a distância mínima de ${config.minGatewayDistance}m. Considere reduzir minGatewayDistance ou aumentar maxGateways.`);
         }
 
         const total = distances.reduce((sum, d) => sum + d.dist, 0);
         let selectedPost = null;
         if (total === 0) {
             console.warn(`Distância total é zero para medoide ${i + 1}/${k}. Possíveis coordenadas duplicadas. Selecionando poste aleatório...`);
-            selectedPost = validPosts[indices[Math.floor(Math.random() * indices.length)]];
+            const validCandidates = validPosts.filter(post =>
+                Math.min(...medoids.map(medoid =>
+                    haversineDistance(post.lat, post.lng, medoid.lat, medoid.lng))) >= config.minGatewayDistance
+            );
+            if (validCandidates.length === 0) {
+                throw new Error(`Nenhum candidato válido para medoide ${i + 1}/${k} respeitando a distância mínima de ${config.minGatewayDistance}m. Considere reduzir minGatewayDistance ou aumentar maxGateways.`);
+            }
+            selectedPost = validCandidates[Math.floor(Math.random() * validCandidates.length)];
         } else {
             const rand = Math.random() * total;
             let sum = 0;
@@ -213,7 +213,10 @@ function kMedoids(posts, k, config) {
         changed = false;
 
         clusters = Array(k).fill().map(() => []);
+        const clusterSizes = Array(k).fill(0);
         const tree = buildSpatialIndex(validPosts);
+        const unassignedPosts = [];
+
         validPosts.forEach((post, index) => {
             if (!post || typeof post.lat !== 'number' || typeof post.lng !== 'number') {
                 console.warn(`Poste inválido no índice ${index} durante atribuição de clusters. Ignorando...`);
@@ -223,16 +226,26 @@ function kMedoids(posts, k, config) {
                 console.log(`Atribuindo postes: ${((index / validPosts.length) * 100).toFixed(1)}% concluído`);
             }
             let minDist = Infinity;
-            let closestMedoid = 0;
+            let closestMedoid = -1;
             for (let i = 0; i < k; i++) {
+                if (clusterSizes[i] >= config.maxDevicesPerGateway) continue;
                 const dist = haversineDistance(post.lat, post.lng, medoids[i].lat, medoids[i].lng);
                 if (dist < minDist) {
                     minDist = dist;
                     closestMedoid = i;
                 }
             }
-            clusters[closestMedoid].push(post);
+            if (closestMedoid >= 0) {
+                clusters[closestMedoid].push(post);
+                clusterSizes[closestMedoid]++;
+            } else {
+                unassignedPosts.push(post);
+            }
         });
+
+        if (unassignedPosts.length > 0) {
+            console.warn(`K-Medoids: ${unassignedPosts.length} postes não atribuídos devido a restrições de capacidade.`);
+        }
         console.log('Atribuição de postes concluída.');
 
         for (let i = 0; i < k; i++) {
@@ -243,6 +256,14 @@ function kMedoids(posts, k, config) {
             for (const candidate of clusters[i]) {
                 if (!candidate || typeof candidate.lat !== 'number' || typeof candidate.lng !== 'number') {
                     console.warn(`Candidato inválido no cluster ${i + 1}. Ignorando...`);
+                    continue;
+                }
+                const minDistToOtherMedoids = Math.min(
+                    ...medoids
+                        .filter((_, idx) => idx !== i)
+                        .map(m => haversineDistance(candidate.lat, candidate.lng, m.lat, m.lng))
+                );
+                if (minDistToOtherMedoids < config.minGatewayDistance) {
                     continue;
                 }
                 const totalDist = clusters[i].reduce((sum, post) =>
@@ -264,17 +285,33 @@ function kMedoids(posts, k, config) {
     return { medoids, clusters };
 }
 
-// Função para gerar arquivo de resumo
-function generateSummary(posts, medoids, clusters, config, coordMap) {
+function generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount) {
     const summary = [];
-    const numConcentrators = medoids.length;
-    const avgDevices = (posts.length / numConcentrators).toFixed(2);
+    const totalPosts = posts.length;
+    const numGatewaysInitial = Math.ceil(validPostsCount / config.maxDevicesPerGateway);
+    const numGatewaysFinal = outputData.length;
+    const assignedPostsCount = clusters.reduce((sum, cluster) => sum + cluster.length, 0);
+    const avgDevices = numGatewaysFinal > 0 ? (assignedPostsCount / numGatewaysFinal).toFixed(2) : 0;
     const duplicatedCoords = Array.from(coordMap.entries()).filter(([_, ids]) => ids.length > 1);
+    const duplicatedPostsCount = duplicatedCoords.reduce((sum, [_, ids]) => sum + (ids.length - 1), 0);
+    const unassignedPostsCount = validPostsCount - assignedPostsCount;
 
-    summary.push(`Resumo da Otimização de Concentradores`);
+    summary.push(`Resumo da Otimização de Gateways`);
     summary.push(`-------------------------------------`);
-    summary.push(`Número de concentradores estimados: ${numConcentrators}`);
-    summary.push(`Média de dispositivos por concentrador: ${avgDevices}`);
+    summary.push(`Número total de postes processados: ${totalPosts}`);
+    summary.push(`Número de postes válidos (coordenadas únicas): ${validPostsCount}`);
+    summary.push(`Número de postes duplicados descartados: ${duplicatedPostsCount}`);
+    summary.push(`Número inicial de gateways estimados: ${numGatewaysInitial}`);
+    summary.push(`Número final de gateways (com postes associados): ${numGatewaysFinal}`);
+    if (numGatewaysInitial > numGatewaysFinal) {
+        summary.push(`Redução de gateways: ${numGatewaysInitial - numGatewaysFinal} gateways foram descartados por não terem postes associados ou por redistribuição.`);
+    }
+    summary.push(`Número de postes atribuídos aos gateways: ${assignedPostsCount}`);
+    summary.push(`Média de dispositivos por gateway (baseado nos postes atribuídos): ${avgDevices}`);
+    summary.push(`Distância mínima entre gateways aplicada: ${config.minGatewayDistance}m`);
+    if (unassignedPostsCount > 0) {
+        summary.push(`Postes não atribuídos: ${unassignedPostsCount} postes não foram associados a nenhum gateway devido a restrições de capacidade, saltos ou distância mínima.`);
+    }
     summary.push(`Coordenadas duplicadas encontradas: ${duplicatedCoords.length}`);
     if (duplicatedCoords.length > 0) {
         summary.push(`Detalhes das coordenadas duplicadas:`);
@@ -284,25 +321,15 @@ function generateSummary(posts, medoids, clusters, config, coordMap) {
     }
 
     const alerts = [];
-    if (config.maxConcentrators && numConcentrators > config.maxConcentrators) {
-        alerts.push(`Número máximo de concentradores (${config.maxConcentrators}) não respeita a métrica de número máximo de dispositivos por concentrador (${config.maxDevicesPerConcentrator}).`);
+    if (config.maxGateways && numGatewaysFinal > config.maxGateways) {
+        alerts.push(`Número final de gateways (${numGatewaysFinal}) excede o limite máximo configurado (${config.maxGateways}).`);
     }
-    const dynamicMaxDevices = config.maxConcentrators ? Math.ceil(posts.length / config.maxConcentrators) : config.maxDevicesPerConcentrator;
-    if (dynamicMaxDevices > config.maxDevicesPerConcentrator) {
-        alerts.push(`Número máximo de dispositivos por concentrador ajustado para ${dynamicMaxDevices} devido ao limite de ${config.maxConcentrators} concentradores.`);
+    const maxClusterSize = clusters.reduce((max, cluster) => Math.max(max, cluster.length), 0);
+    if (maxClusterSize > config.maxDevicesPerGateway) {
+        alerts.push(`Alguns clusters excedem o limite de ${config.maxDevicesPerGateway} dispositivos por gateway (máximo encontrado: ${maxClusterSize}).`);
     }
-
-    const clusterSizes = clusters.map(cluster => cluster.length);
-    const avgClusterSize = clusterSizes.reduce((sum, size) => sum + size, 0) / clusterSizes.length;
-    const isolatedClusters = clusters
-        .map((cluster, index) => ({ index: index + 1, size: cluster.length }))
-        .filter(cluster => cluster.size < avgClusterSize * 0.5);
-
-    if (isolatedClusters.length > 0) {
-        alerts.push(`Redes isoladas detectadas (${isolatedClusters.length}):`);
-        isolatedClusters.forEach(cluster => {
-            alerts.push(`  Cluster ${cluster.index} com ${cluster.size} dispositivos (muito abaixo da média de ${avgClusterSize.toFixed(2)})`);
-        });
+    if (unassignedPostsCount > 0) {
+        alerts.push(`Existem ${unassignedPostsCount} postes não atribuídos, indicando possível necessidade de mais gateways ou ajustes na configuração.`);
     }
 
     if (alerts.length > 0) {
@@ -314,12 +341,38 @@ function generateSummary(posts, medoids, clusters, config, coordMap) {
     console.log('Arquivo de resumo gerado: summary.txt');
 }
 
-// Função principal
-async function optimizeConcentrators(inputFile, outputFile) {
-    console.log(`Iniciando otimização de concentradores com arquivo ${inputFile}...`);
-    const config = loadConfig();
-    console.log('Configurações carregadas:', config);
+function generateGeoJSON(posts, medoids, clusters, coordMap) {
+    const features = [];
 
+    medoids.forEach((medoid, index) => {
+        if (clusters[index].length > 0) {
+            features.push({
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: [medoid.lng, medoid.lat]
+                },
+                properties: {
+                    id: `C${index + 1}`,
+                    type: 'gateway',
+                    icon: 'gateway-icon'
+                }
+            });
+        }
+    });
+
+    const geojson = {
+        type: 'FeatureCollection',
+        features
+    };
+
+    fs.writeFileSync('gateways.geojson', JSON.stringify(geojson, null, 2));
+    console.log('Arquivo GeoJSON gerado: gateways.geojson');
+}
+
+async function optimizeGateways(inputFile, outputFile) {
+    console.log(`Iniciando otimização de gateways com arquivo ${inputFile}...`);
+    const config = loadConfig();
     console.log('Lendo arquivo de entrada...');
     const workbook = XLSX.readFile(inputFile, { sheetRows: 100000 });
     const sheetName = workbook.SheetNames[0];
@@ -353,7 +406,6 @@ async function optimizeConcentrators(inputFile, outputFile) {
         }
     });
 
-    // Verificar duplicatas de coordenadas
     const coordMap = new Map();
     posts.forEach((post, index) => {
         const key = `${post.lat},${post.lng}`;
@@ -362,13 +414,14 @@ async function optimizeConcentrators(inputFile, outputFile) {
         }
         coordMap.get(key).push(post.id);
     });
-    for (const [key, ids] of coordMap) {
+    for (let [key, ids] of coordMap) {
         if (ids.length > 1) {
-            console.warn(`Coordenadas duplicadas detectadas (${key}): ${ids.length} postes (${ids.join(', ')}). Isso pode afetar a seleção de medoides.`);
+            console.warn(`Coordenadas duplicadas detectadas (${key}): ${ids.length} postes (${ids.join(', ')}). Isso pode afetar a eficiência de meditação.`);
         }
     }
 
-    console.log(`Arquivo lido: ${posts.length} postes carregados. ${normalizedCount} coordenadas normalizadas (vírgula para ponto).`);
+    const validPostsCount = coordMap.size;
+    console.log(`Arquivo lido: ${posts.length} postes carregados, ${validPostsCount} coordenadas únicas válidas. ${normalizedCount} coordenadas normalizadas (vírgula para ponto).`);
 
     if (posts.length === 0) {
         throw new Error('Nenhum poste válido encontrado no arquivo de entrada.');
@@ -378,15 +431,23 @@ async function optimizeConcentrators(inputFile, outputFile) {
         throw new Error('Arquivo contém postes com colunas inválidas: id, lat, lng devem estar presentes e ser válidos.');
     }
 
-    let k = config.maxConcentrators || Math.ceil(posts.length / config.maxDevicesPerConcentrator);
-    console.log(`Número inicial de concentradores: ${k}`);
-    const dynamicMaxDevices = config.maxConcentrators ? Math.ceil(posts.length / config.maxConcentrators) : config.maxDevicesPerConcentrator;
-    if (dynamicMaxDevices > config.maxDevicesPerConcentrator) {
-        console.warn(`Aviso: Com ${config.maxConcentrators} concentradores, o número máximo de dispositivos por concentrador será ajustado para ${dynamicMaxDevices} para acomodar ${posts.length} postes.`);
+    const validPosts = [];
+    for (const [key, ids] of coordMap) {
+        const [lat, lng] = key.split(',').map(parseFloat);
+        const post = posts.find(p => p.id === ids[0]);
+        validPosts.push({ ...post, lat, lng });
+    }
+    console.log(`Selecionado ${validPosts.length} postes válidos com coordenadas únicas.`);
+
+    let k = config.maxGateways || Math.ceil(validPostsCount / config.maxDevicesPerGateway);
+    console.log(`Número inicial de gateways estimado com base em ${validPostsCount} postes válidos: ${k}`);
+    const dynamicMaxDevices = config.maxGateways ? Math.ceil(validPosts.length / config.maxGateways) : config.maxDevicesPerGateway;
+    if (dynamicMaxDevices > config.maxDevicesPerGateway) {
+        console.warn(`Aviso: Com ${config.maxGateways} gateways, o número máximo de dispositivos por gateway será ajustado para ${dynamicMaxDevices} para acomodar ${validPosts.length} postes.`);
     }
 
     console.log('Executando algoritmo K-Medoids...');
-    let { medoids, clusters } = kMedoids(posts, k, config);
+    let { medoids, clusters } = kMedoids(validPosts, k, config);
     console.log('K-Medoids concluído.');
 
     console.log('Verificando restrições de capacidade e saltos...');
@@ -398,9 +459,9 @@ async function optimizeConcentrators(inputFile, outputFile) {
         valid = true;
         const checks = await Promise.all(clusters.map(async (cluster, i) => {
             console.log(`Verificando cluster ${i + 1}/${k} (${cluster.length} postes)...`);
-            if (cluster.length > dynamicMaxDevices) {
-                console.log(`Cluster ${i + 1} excede ${dynamicMaxDevices} dispositivos.`);
-                return { index: i, valid: false, reason: `Excede ${dynamicMaxDevices} dispositivos` };
+            if (cluster.length > config.maxDevicesPerGateway) {
+                console.log(`Cluster ${i + 1} excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length}).`);
+                return { index: i, valid: false, reason: `Excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length})` };
             }
 
             const distances = await runWorker(cluster, medoids[i], config);
@@ -420,45 +481,48 @@ async function optimizeConcentrators(inputFile, outputFile) {
 
         for (const check of checks) {
             if (!check.valid) {
-                console.log(`Restrição violada: ${check.reason}.`);
-                if (!config.maxConcentrators || k < config.maxConcentrators) {
+                console.log(`Restrição violada: ${check.reason}`);
+                if (!config.maxGateways || k < config.maxGateways) {
                     console.log(`Aumentando k para ${k + 1}...`);
                     k++;
-                    ({ medoids, clusters } = kMedoids(posts, k, config));
+                    ({ medoids, clusters } = kMedoids(validPosts, k, config));
                     valid = false;
                     break;
                 } else {
-                    console.warn(`Não é possível aumentar k além de ${config.maxConcentrators} devido ao limite definido em config.json. Continuando com clusters atuais.`);
-                    valid = true; // Aceitar a solução atual, mesmo com violações
+                    console.warn(`Não é possível aumentar k além de ${config.maxGateways} devido ao limite definido em config.json. Continuando com clusters atuais.`);
+                    valid = true;
                     break;
                 }
             }
         }
     }
-    console.log('Todas as restrições atendidas ou limite máximo de concentradores alcançado.');
+    console.log('Todas as restrições atendidas ou limite máximo de gateways atingido.');
 
     console.log('Gerando arquivo de saída...');
-    const outputData = medoids.map((medoid, index) => ({
-        concentrator_id: `C${index + 1}`,
-        lat: medoid.lat,
-        lng: medoid.lng,
-        assigned_posts: clusters[index].map(post => post.id).join(',')
-    }));
+    const outputData = medoids
+        .map((medoid, index) => ({
+            concentrator_id: `C${index + 1}`,
+            lat: medoid.lat,
+            lng: medoid.lng
+        }))
+        .filter((_, index) => clusters[index].length > 0);
 
     const ws = XLSX.utils.json_to_sheet(outputData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Concentrators');
+    XLSX.utils.book_append_sheet(wb, ws, 'Gateways');
     XLSX.writeFile(wb, outputFile);
-    console.log(`Arquivo de saída gerado: ${outputFile}`);
+    console.log(`Arquivo de saída gerado: ${outputFile} com ${outputData.length} gateways válidos.`);
+
+    console.log('Gerando arquivo GeoJSON...');
+    generateGeoJSON(posts, medoids, clusters, coordMap);
 
     console.log('Gerando arquivo de resumo...');
-    generateSummary(posts, medoids, clusters, config, coordMap);
+    generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount);
 }
 
-// Executar
 if (isMainThread) {
     try {
-        optimizeConcentrators('posts.xlsx', 'concentrators.xlsx');
+        optimizeGateways('posts.xlsx', 'gateways.xlsx');
     } catch (error) {
         console.error('Erro:', error.message);
     }
