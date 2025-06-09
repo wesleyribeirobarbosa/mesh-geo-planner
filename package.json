@@ -2,10 +2,11 @@
   "name": "mesh-geo-planner",
   "version": "1.0.0",
   "description": "Otimização de Posicionamento de Concentradores para Redes Mesh",
-  "main": "index.js",
+  "main": "api.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node api.js"
+    "start": "node api.js",
+    "client": "cd client && npm start",
+    "dev": "concurrently \"npm run start\" \"npm run client\""
   },
   "repository": {
     "type": "git",
@@ -19,11 +20,16 @@
   },
   "homepage": "https://github.com/wesleyribeirobarbosa/mesh-geo-planner#readme",
   "dependencies": {
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^5.1.0",
     "fs": "^0.0.1-security",
     "multer": "^2.0.1",
     "rbush": "^4.0.1",
+    "socket.io": "^4.7.4",
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
   }
 }

@@ -401,18 +401,27 @@ function generateGeoJSON(posts, medoids, clusters, coordMap) {
     console.log('Arquivo GeoJSON gerado: output/gateways.geojson');
 }
 
-async function optimizeGateways(inputFile, outputFile) {
+async function optimizeGateways(inputFile, outputFile, io) {
     const outputDir = ensureOutputDir();
     console.log(`Iniciando otimização de gateways com arquivo ${inputFile}...`);
     const config = loadConfig();
-    console.log('Lendo arquivo de entrada...');
+
+    // Função para enviar atualizações de status
+    const sendStatus = (message) => {
+        console.log(message);
+        if (io) {
+            io.emit('status', { message });
+        }
+    };
+
+    sendStatus('Lendo arquivo de entrada...');
     const workbook = XLSX.readFile(inputFile, { sheetRows: 100000 });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
     let posts = XLSX.utils.sheet_to_json(sheet);
     let normalizedCount = 0;
 
-    console.log('Normalizando coordenadas...');
+    sendStatus('Normalizando coordenadas...');
     posts = posts.filter((post, index) => {
         if (!post) {
             console.warn(`Poste indefinido encontrado no índice ${index} durante a leitura. Ignorando...`);
@@ -438,6 +447,7 @@ async function optimizeGateways(inputFile, outputFile) {
         }
     });
 
+    sendStatus('Verificando coordenadas duplicadas...');
     const coordMap = new Map();
     posts.forEach((post, index) => {
         const key = `${post.lat},${post.lng}`;
@@ -446,14 +456,9 @@ async function optimizeGateways(inputFile, outputFile) {
         }
         coordMap.get(key).push(post.id);
     });
-    for (let [key, ids] of coordMap) {
-        if (ids.length > 1) {
-            console.warn(`Coordenadas duplicadas detectadas (${key}): ${ids.length} postes (${ids.join(', ')}). Isso pode afetar a eficiência de meditação.`);
-        }
-    }
 
     const validPostsCount = coordMap.size;
-    console.log(`Arquivo lido: ${posts.length} postes carregados, ${validPostsCount} coordenadas únicas válidas. ${normalizedCount} coordenadas normalizadas (vírgula para ponto).`);
+    sendStatus(`Arquivo processado: ${posts.length} postes carregados, ${validPostsCount} coordenadas únicas válidas. ${normalizedCount} coordenadas normalizadas.`);
 
     if (posts.length === 0) {
         throw new Error('Nenhum poste válido encontrado no arquivo de entrada.');
@@ -463,72 +468,74 @@ async function optimizeGateways(inputFile, outputFile) {
         throw new Error('Arquivo contém postes com colunas inválidas: id, lat, lng devem estar presentes e ser válidos.');
     }
 
+    sendStatus('Selecionando postes válidos com coordenadas únicas...');
     const validPosts = [];
     for (const [key, ids] of coordMap) {
         const [lat, lng] = key.split(',').map(parseFloat);
         const post = posts.find(p => p.id === ids[0]);
         validPosts.push({ ...post, lat, lng });
     }
-    console.log(`Selecionado ${validPosts.length} postes válidos com coordenadas únicas.`);
+    sendStatus(`Selecionados ${validPosts.length} postes válidos com coordenadas únicas.`);
 
     let k = config.maxGateways || Math.ceil(validPostsCount / config.maxDevicesPerGateway);
-    console.log(`Número inicial de gateways estimado com base em ${validPostsCount} postes válidos: ${k}`);
+    sendStatus(`Estimando número inicial de gateways: ${k} (baseado em ${validPostsCount} postes válidos)`);
+
     const dynamicMaxDevices = config.maxGateways ? Math.ceil(validPosts.length / config.maxGateways) : config.maxDevicesPerGateway;
     if (dynamicMaxDevices > config.maxDevicesPerGateway) {
-        console.warn(`Aviso: Com ${config.maxGateways} gateways, o número máximo de dispositivos por gateway será ajustado para ${dynamicMaxDevices} para acomodar ${validPosts.length} postes.`);
+        sendStatus(`Ajustando número máximo de dispositivos por gateway para ${dynamicMaxDevices} para acomodar ${validPosts.length} postes.`);
     }
 
-    console.log('Executando algoritmo K-Medoids...');
+    sendStatus('Iniciando algoritmo K-Medoids...');
     let { medoids, clusters } = kMedoids(validPosts, k, config);
-    console.log('K-Medoids concluído.');
+    sendStatus('K-Medoids concluído.');
 
-    console.log('Verificando restrições de capacidade, saltos e carga de retransmissão...');
+    sendStatus('Verificando restrições de capacidade, saltos e carga de retransmissão...');
     let valid = false;
     let iteration = 0;
     while (!valid && iteration < config.maxIterations) {
         iteration++;
-        console.log(`Verificação de restrições: Iteração ${iteration}`);
+        sendStatus(`Verificação de restrições: Iteração ${iteration}`);
         valid = true;
         const checks = await Promise.all(clusters.map(async (cluster, i) => {
-            console.log(`Verificando cluster ${i + 1}/${k} (${cluster.length} postes)...`);
+            sendStatus(`Verificando cluster ${i + 1}/${k} (${cluster.length} postes)...`);
             if (cluster.length > config.maxDevicesPerGateway) {
-                console.log(`Cluster ${i + 1} excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length}).`);
+                sendStatus(`Cluster ${i + 1} excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length}).`);
                 return { index: i, valid: false, reason: `Excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length})` };
             }
 
             const result = await runWorker(cluster, medoids[i], config);
             if (result.error) {
-                console.log(`Erro na verificação para cluster ${i + 1}: ${result.error}`);
+                sendStatus(`Erro na verificação para cluster ${i + 1}: ${result.error}`);
                 return { index: i, valid: false, reason: result.error };
             }
             if (!result.valid) {
-                console.log(`Restrição violada no cluster ${i + 1}: ${result.reason}`);
+                sendStatus(`Restrição violada no cluster ${i + 1}: ${result.reason}`);
                 return { index: i, valid: false, reason: result.reason };
             }
-            console.log(`Cluster ${i + 1} válido.`);
+            sendStatus(`Cluster ${i + 1} válido.`);
             return { index: i, valid: true };
         }));
 
         for (const check of checks) {
             if (!check.valid) {
-                console.log(`Restrição violada: ${check.reason}`);
+                sendStatus(`Restrição violada: ${check.reason}`);
                 if (!config.maxGateways || k < config.maxGateways) {
-                    console.log(`Aumentando k para ${k + 1}...`);
+                    sendStatus(`Aumentando número de gateways para ${k + 1}...`);
                     k++;
                     ({ medoids, clusters } = kMedoids(validPosts, k, config));
                     valid = false;
                     break;
                 } else {
-                    console.warn(`Não é possível aumentar k além de ${config.maxGateways} devido ao limite definido em config.json. Continuando com clusters atuais.`);
+                    sendStatus(`Não é possível aumentar o número de gateways além de ${config.maxGateways}. Continuando com clusters atuais.`);
                     valid = true;
                     break;
                 }
             }
         }
     }
-    console.log('Todas as restrições atendidas ou limite máximo de gateways atingido.');
+    sendStatus('Todas as restrições atendidas ou limite máximo de gateways atingido.');
 
-    console.log('Gerando arquivo de saída...');
+    sendStatus('Gerando arquivo de saída...');
     const outputData = medoids
         .map((medoid, index) => ({
             concentrator_id: `C${index + 1}`,
@@ -541,13 +548,15 @@ async function optimizeGateways(inputFile, outputFile) {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Gateways');
     XLSX.writeFile(wb, path.join(outputDir, outputFile));
-    console.log(`Arquivo de saída gerado: output/${outputFile} com ${outputData.length} gateways válidos.`);
+    sendStatus(`Arquivo de saída gerado: output/${outputFile} com ${outputData.length} gateways válidos.`);
 
-    console.log('Gerando arquivo GeoJSON...');
+    sendStatus('Gerando arquivo GeoJSON...');
     generateGeoJSON(posts, medoids, clusters, coordMap);
 
-    console.log('Gerando arquivo de resumo...');
+    sendStatus('Gerando arquivo de resumo...');
     generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount);
+
+    sendStatus('Processamento concluído com sucesso!');
 }
 
 // Exporta a função para uso na API

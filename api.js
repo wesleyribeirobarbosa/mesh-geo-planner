@@ -1,13 +1,43 @@
+require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { createServer } = require('http');
+const { Server } = require('socket.io');
+const cors = require('cors');
 const { optimizeGateways } = require('./gw_position_planner');
 
-require('dotenv').config();
-
 const app = express();
-const port = process.env.PORT || 3000;
+const httpServer = createServer(app);
+
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3092';
+const PORT = process.env.PORT || 3000;
+
+console.log('Configuração do servidor:');
+console.log('CLIENT_URL:', CLIENT_URL);
+console.log('PORT:', PORT);
+
+// Configuração do CORS
+app.use(cors({
+    origin: CLIENT_URL,
+    credentials: true,
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type']
+}));
+
+// Configuração do WebSocket
+const io = new Server(httpServer, {
+    cors: {
+        origin: CLIENT_URL,
+        methods: ['GET', 'POST'],
+        credentials: true,
+        transports: ['websocket', 'polling']
+    },
+    allowEIO3: true,
+    pingTimeout: 60000,
+    pingInterval: 25000
+});
 
 // Adiciona middleware para logging
 app.use((req, res, next) => {
@@ -48,6 +78,15 @@ const upload = multer({
     }
 });
 
+// Função para enviar atualizações de status
+function sendStatusUpdate(socket, message, progress = null) {
+    console.log('Enviando atualização:', { message, progress });
+    socket.emit('status', { message });
+    if (progress !== null) {
+        socket.emit('progress', { progress });
+    }
+}
+
 // Rota para upload do arquivo
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
@@ -64,12 +103,13 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         console.log('Iniciando processamento do arquivo:', inputFile);
 
         // Inicia o processamento em background
-        optimizeGateways(inputFile, outputFile)
+        optimizeGateways(inputFile, outputFile, io)
             .then(() => {
                 console.log('Processamento concluído com sucesso');
             })
             .catch((error) => {
                 console.error('Erro no processamento:', error);
+                io.emit('error', { message: error.message });
             });
 
         res.status(200).json({
@@ -89,6 +129,24 @@ app.get('/', (req, res) => {
     res.send('API de otimização de gateways está funcionando!');
 });
 
-app.listen(port, () => {
-    console.log(`Servidor rodando na porta ${port}`);
+// Configuração do WebSocket
+io.on('connection', (socket) => {
+    console.log('Cliente conectado:', socket.id);
+
+    // Envia mensagem de teste para o cliente
+    socket.emit('status', { message: 'Conectado ao servidor com sucesso!' });
+
+    socket.on('disconnect', () => {
+        console.log('Cliente desconectado:', socket.id);
+    });
+
+    socket.on('error', (error) => {
+        console.error('Erro no WebSocket:', error);
+    });
+});
+
+// Inicia o servidor
+httpServer.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+    console.log(`WebSocket disponível em ws://localhost:${PORT}`);
 }); 
