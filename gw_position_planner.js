@@ -369,6 +369,7 @@ function generateSummary(posts, outputData, clusters, config, coordMap, validPos
 
     fs.writeFileSync(path.join(outputDir, 'summary.txt'), summary.join('\n'));
     console.log('Arquivo de resumo gerado: output/summary.txt');
+    return path.join(outputDir, 'summary.txt');
 }
 
 function generateGeoJSON(posts, medoids, clusters, coordMap) {
@@ -399,6 +400,7 @@ function generateGeoJSON(posts, medoids, clusters, coordMap) {
 
     fs.writeFileSync(path.join(outputDir, 'gateways.geojson'), JSON.stringify(geojson, null, 2));
     console.log('Arquivo GeoJSON gerado: output/gateways.geojson');
+    return path.join(outputDir, 'gateways.geojson');
 }
 
 async function optimizeGateways(inputFile, outputFile, io) {
@@ -414,149 +416,175 @@ async function optimizeGateways(inputFile, outputFile, io) {
         }
     };
 
-    sendStatus('Lendo arquivo de entrada...');
-    const workbook = XLSX.readFile(inputFile, { sheetRows: 100000 });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    let posts = XLSX.utils.sheet_to_json(sheet);
-    let normalizedCount = 0;
+    try {
+        sendStatus('Lendo arquivo de entrada...');
+        const workbook = XLSX.readFile(inputFile, { sheetRows: 100000 });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        let posts = XLSX.utils.sheet_to_json(sheet);
+        let normalizedCount = 0;
 
-    sendStatus('Normalizando coordenadas...');
-    posts = posts.filter((post, index) => {
-        if (!post) {
-            console.warn(`Poste indefinido encontrado no índice ${index} durante a leitura. Ignorando...`);
-            return false;
-        }
-        if (!post.id || post.lat === undefined || post.lng === undefined) {
-            console.warn(`Poste no índice ${index} falta id, lat ou lng. Ignorando...`);
-            return false;
-        }
-        try {
-            const originalLat = post.lat;
-            const originalLng = post.lng;
-            post.lat = normalizeCoordinate(post.lat);
-            post.lng = normalizeCoordinate(post.lng);
-            if (typeof originalLat === 'string' && originalLat.includes(',') ||
-                typeof originalLng === 'string' && originalLng.includes(',')) {
-                normalizedCount++;
+        sendStatus('Normalizando coordenadas...');
+        posts = posts.filter((post, index) => {
+            if (!post) {
+                console.warn(`Poste indefinido encontrado no índice ${index} durante a leitura. Ignorando...`);
+                return false;
             }
-            return true;
-        } catch (error) {
-            console.warn(`Poste inválido no índice ${index}: ${error.message}. Ignorando...`);
-            return false;
+            if (!post.id || post.lat === undefined || post.lng === undefined) {
+                console.warn(`Poste no índice ${index} falta id, lat ou lng. Ignorando...`);
+                return false;
+            }
+            try {
+                const originalLat = post.lat;
+                const originalLng = post.lng;
+                post.lat = normalizeCoordinate(post.lat);
+                post.lng = normalizeCoordinate(post.lng);
+                if (typeof originalLat === 'string' && originalLat.includes(',') ||
+                    typeof originalLng === 'string' && originalLng.includes(',')) {
+                    normalizedCount++;
+                }
+                return true;
+            } catch (error) {
+                console.warn(`Poste inválido no índice ${index}: ${error.message}. Ignorando...`);
+                return false;
+            }
+        });
+
+        sendStatus('Verificando coordenadas duplicadas...');
+        const coordMap = new Map();
+        posts.forEach((post, index) => {
+            const key = `${post.lat},${post.lng}`;
+            if (!coordMap.has(key)) {
+                coordMap.set(key, []);
+            }
+            coordMap.get(key).push(post.id);
+        });
+
+        const validPostsCount = coordMap.size;
+        sendStatus(`Arquivo processado: ${posts.length} postes carregados, ${validPostsCount} coordenadas únicas válidas. ${normalizedCount} coordenadas normalizadas.`);
+
+        if (posts.length === 0) {
+            throw new Error('Nenhum poste válido encontrado no arquivo de entrada.');
         }
-    });
 
-    sendStatus('Verificando coordenadas duplicadas...');
-    const coordMap = new Map();
-    posts.forEach((post, index) => {
-        const key = `${post.lat},${post.lng}`;
-        if (!coordMap.has(key)) {
-            coordMap.set(key, []);
+        if (!posts.every(post => post && post.id && typeof post.lat === 'number' && typeof post.lng === 'number')) {
+            throw new Error('Arquivo contém postes com colunas inválidas: id, lat, lng devem estar presentes e ser válidos.');
         }
-        coordMap.get(key).push(post.id);
-    });
 
-    const validPostsCount = coordMap.size;
-    sendStatus(`Arquivo processado: ${posts.length} postes carregados, ${validPostsCount} coordenadas únicas válidas. ${normalizedCount} coordenadas normalizadas.`);
+        sendStatus('Selecionando postes válidos com coordenadas únicas...');
+        const validPosts = [];
+        for (const [key, ids] of coordMap) {
+            const [lat, lng] = key.split(',').map(parseFloat);
+            const post = posts.find(p => p.id === ids[0]);
+            validPosts.push({ ...post, lat, lng });
+        }
+        sendStatus(`Selecionados ${validPosts.length} postes válidos com coordenadas únicas.`);
 
-    if (posts.length === 0) {
-        throw new Error('Nenhum poste válido encontrado no arquivo de entrada.');
-    }
+        let k = config.maxGateways || Math.ceil(validPostsCount / config.maxDevicesPerGateway);
+        sendStatus(`Estimando número inicial de gateways: ${k} (baseado em ${validPostsCount} postes válidos)`);
 
-    if (!posts.every(post => post && post.id && typeof post.lat === 'number' && typeof post.lng === 'number')) {
-        throw new Error('Arquivo contém postes com colunas inválidas: id, lat, lng devem estar presentes e ser válidos.');
-    }
+        const dynamicMaxDevices = config.maxGateways ? Math.ceil(validPosts.length / config.maxGateways) : config.maxDevicesPerGateway;
+        if (dynamicMaxDevices > config.maxDevicesPerGateway) {
+            sendStatus(`Ajustando número máximo de dispositivos por gateway para ${dynamicMaxDevices} para acomodar ${validPosts.length} postes.`);
+        }
 
-    sendStatus('Selecionando postes válidos com coordenadas únicas...');
-    const validPosts = [];
-    for (const [key, ids] of coordMap) {
-        const [lat, lng] = key.split(',').map(parseFloat);
-        const post = posts.find(p => p.id === ids[0]);
-        validPosts.push({ ...post, lat, lng });
-    }
-    sendStatus(`Selecionados ${validPosts.length} postes válidos com coordenadas únicas.`);
+        sendStatus('Iniciando algoritmo K-Medoids...');
+        let { medoids, clusters } = kMedoids(validPosts, k, config);
+        sendStatus('K-Medoids concluído.');
 
-    let k = config.maxGateways || Math.ceil(validPostsCount / config.maxDevicesPerGateway);
-    sendStatus(`Estimando número inicial de gateways: ${k} (baseado em ${validPostsCount} postes válidos)`);
+        sendStatus('Verificando restrições de capacidade, saltos e carga de retransmissão...');
+        let valid = false;
+        let iteration = 0;
+        while (!valid && iteration < config.maxIterations) {
+            iteration++;
+            sendStatus(`Verificação de restrições: Iteração ${iteration}`);
+            valid = true;
+            const checks = await Promise.all(clusters.map(async (cluster, i) => {
+                sendStatus(`Verificando cluster ${i + 1}/${k} (${cluster.length} postes)...`);
+                if (cluster.length > config.maxDevicesPerGateway) {
+                    sendStatus(`Cluster ${i + 1} excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length}).`);
+                    return { index: i, valid: false, reason: `Excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length})` };
+                }
 
-    const dynamicMaxDevices = config.maxGateways ? Math.ceil(validPosts.length / config.maxGateways) : config.maxDevicesPerGateway;
-    if (dynamicMaxDevices > config.maxDevicesPerGateway) {
-        sendStatus(`Ajustando número máximo de dispositivos por gateway para ${dynamicMaxDevices} para acomodar ${validPosts.length} postes.`);
-    }
+                const result = await runWorker(cluster, medoids[i], config);
+                if (result.error) {
+                    sendStatus(`Erro na verificação para cluster ${i + 1}: ${result.error}`);
+                    return { index: i, valid: false, reason: result.error };
+                }
+                if (!result.valid) {
+                    sendStatus(`Restrição violada no cluster ${i + 1}: ${result.reason}`);
+                    return { index: i, valid: false, reason: result.reason };
+                }
+                sendStatus(`Cluster ${i + 1} válido.`);
+                return { index: i, valid: true };
+            }));
 
-    sendStatus('Iniciando algoritmo K-Medoids...');
-    let { medoids, clusters } = kMedoids(validPosts, k, config);
-    sendStatus('K-Medoids concluído.');
-
-    sendStatus('Verificando restrições de capacidade, saltos e carga de retransmissão...');
-    let valid = false;
-    let iteration = 0;
-    while (!valid && iteration < config.maxIterations) {
-        iteration++;
-        sendStatus(`Verificação de restrições: Iteração ${iteration}`);
-        valid = true;
-        const checks = await Promise.all(clusters.map(async (cluster, i) => {
-            sendStatus(`Verificando cluster ${i + 1}/${k} (${cluster.length} postes)...`);
-            if (cluster.length > config.maxDevicesPerGateway) {
-                sendStatus(`Cluster ${i + 1} excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length}).`);
-                return { index: i, valid: false, reason: `Excede ${config.maxDevicesPerGateway} dispositivos (${cluster.length})` };
-            }
-
-            const result = await runWorker(cluster, medoids[i], config);
-            if (result.error) {
-                sendStatus(`Erro na verificação para cluster ${i + 1}: ${result.error}`);
-                return { index: i, valid: false, reason: result.error };
-            }
-            if (!result.valid) {
-                sendStatus(`Restrição violada no cluster ${i + 1}: ${result.reason}`);
-                return { index: i, valid: false, reason: result.reason };
-            }
-            sendStatus(`Cluster ${i + 1} válido.`);
-            return { index: i, valid: true };
-        }));
-
-        for (const check of checks) {
-            if (!check.valid) {
-                sendStatus(`Restrição violada: ${check.reason}`);
-                if (!config.maxGateways || k < config.maxGateways) {
-                    sendStatus(`Aumentando número de gateways para ${k + 1}...`);
-                    k++;
-                    ({ medoids, clusters } = kMedoids(validPosts, k, config));
-                    valid = false;
-                    break;
-                } else {
-                    sendStatus(`Não é possível aumentar o número de gateways além de ${config.maxGateways}. Continuando com clusters atuais.`);
-                    valid = true;
-                    break;
+            for (const check of checks) {
+                if (!check.valid) {
+                    sendStatus(`Restrição violada: ${check.reason}`);
+                    if (!config.maxGateways || k < config.maxGateways) {
+                        sendStatus(`Aumentando número de gateways para ${k + 1}...`);
+                        k++;
+                        ({ medoids, clusters } = kMedoids(validPosts, k, config));
+                        valid = false;
+                        break;
+                    } else {
+                        sendStatus(`Não é possível aumentar o número de gateways além de ${config.maxGateways}. Continuando com clusters atuais.`);
+                        valid = true;
+                        break;
+                    }
                 }
             }
         }
+        sendStatus('Todas as restrições atendidas ou limite máximo de gateways atingido.');
+
+        sendStatus('Gerando arquivo de saída...');
+        const outputData = medoids
+            .map((medoid, index) => ({
+                concentrator_id: `C${index + 1}`,
+                lat: medoid.lat,
+                lng: medoid.lng
+            }))
+            .filter((_, index) => clusters[index].length > 0);
+
+        const ws = XLSX.utils.json_to_sheet(outputData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Gateways');
+        const xlsxPath = path.join(outputDir, outputFile);
+        XLSX.writeFile(wb, xlsxPath);
+        sendStatus(`Arquivo de saída gerado: output/${outputFile} com ${outputData.length} gateways válidos.`);
+
+        sendStatus('Gerando arquivo GeoJSON...');
+        const geojsonPath = generateGeoJSON(posts, medoids, clusters, coordMap);
+
+        sendStatus('Gerando arquivo de resumo...');
+        const summaryPath = generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount);
+
+        sendStatus('Processamento concluído com sucesso!');
+
+        // Retorna informações sobre os arquivos gerados
+        return {
+            success: true,
+            files: {
+                xlsx: {
+                    path: xlsxPath,
+                    name: outputFile
+                },
+                geojson: {
+                    path: geojsonPath,
+                    name: 'gateways.geojson'
+                },
+                summary: {
+                    path: summaryPath,
+                    name: 'summary.txt'
+                }
+            }
+        };
+    } catch (error) {
+        console.error('Erro no processamento:', error);
+        sendStatus(`Erro no processamento: ${error.message}`);
+        throw error;
     }
-    sendStatus('Todas as restrições atendidas ou limite máximo de gateways atingido.');
-
-    sendStatus('Gerando arquivo de saída...');
-    const outputData = medoids
-        .map((medoid, index) => ({
-            concentrator_id: `C${index + 1}`,
-            lat: medoid.lat,
-            lng: medoid.lng
-        }))
-        .filter((_, index) => clusters[index].length > 0);
-
-    const ws = XLSX.utils.json_to_sheet(outputData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Gateways');
-    XLSX.writeFile(wb, path.join(outputDir, outputFile));
-    sendStatus(`Arquivo de saída gerado: output/${outputFile} com ${outputData.length} gateways válidos.`);
-
-    sendStatus('Gerando arquivo GeoJSON...');
-    generateGeoJSON(posts, medoids, clusters, coordMap);
-
-    sendStatus('Gerando arquivo de resumo...');
-    generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount);
-
-    sendStatus('Processamento concluído com sucesso!');
 }
 
 // Exporta a função para uso na API

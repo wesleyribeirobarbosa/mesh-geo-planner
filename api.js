@@ -87,6 +87,18 @@ function sendStatusUpdate(socket, message, progress = null) {
     }
 }
 
+// Rota para download de arquivos
+app.get('/download/:filename', (req, res) => {
+    const filename = req.params.filename;
+    const filePath = path.join(__dirname, 'output', filename);
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'Arquivo não encontrado' });
+    }
+
+    res.download(filePath);
+});
+
 // Rota para upload do arquivo
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
@@ -104,12 +116,19 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
         // Inicia o processamento em background
         optimizeGateways(inputFile, outputFile, io)
-            .then(() => {
+            .then((result) => {
                 console.log('Processamento concluído com sucesso');
+                io.emit('processComplete', {
+                    success: true,
+                    files: result.files
+                });
             })
             .catch((error) => {
                 console.error('Erro no processamento:', error);
-                io.emit('error', { message: error.message });
+                io.emit('processComplete', {
+                    success: false,
+                    error: error.message
+                });
             });
 
         res.status(200).json({

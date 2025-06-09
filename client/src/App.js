@@ -37,6 +37,7 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [statusHistory, setStatusHistory] = useState([]);
+  const [processResult, setProcessResult] = useState(null);
   const statusEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -52,6 +53,7 @@ function App() {
     if (selectedFile) {
       setFile(selectedFile);
       setError('');
+      setProcessResult(null);
     }
   };
 
@@ -64,6 +66,7 @@ function App() {
     setUploading(true);
     setError('');
     setStatusHistory([]);
+    setProcessResult(null);
 
     try {
       const response = await uploadFile(file);
@@ -73,6 +76,10 @@ function App() {
       setError(err.message || 'Erro ao fazer upload do arquivo');
       setUploading(false);
     }
+  };
+
+  const handleDownload = (filename) => {
+    window.open(`${API_URL}/download/${filename}`, '_blank');
   };
 
   useEffect(() => {
@@ -107,9 +114,13 @@ function App() {
       setStatusHistory(prev => [...prev, data.message]);
     });
 
-    socket.on('error', (data) => {
-      console.error('Erro recebido:', data);
-      setError(data.message);
+    socket.on('processComplete', (data) => {
+      console.log('Processamento concluído:', data);
+      setUploading(false);
+      setProcessResult(data);
+      if (!data.success) {
+        setError(data.error);
+      }
     });
 
     return () => {
@@ -158,6 +169,23 @@ function App() {
           <Alert severity="error" sx={{ mb: 2 }}>
             {error}
           </Alert>
+        )}
+
+        {processResult?.success && (
+          <div className="download-section">
+            <h2>Arquivos Gerados</h2>
+            <div className="download-buttons">
+              <button onClick={() => handleDownload(processResult.files.xlsx.name)}>
+                Baixar Excel
+              </button>
+              <button onClick={() => handleDownload(processResult.files.geojson.name)}>
+                Baixar GeoJSON
+              </button>
+              <button onClick={() => handleDownload(processResult.files.summary.name)}>
+                Baixar Resumo
+              </button>
+            </div>
+          </div>
         )}
 
         <div className="status-section">
