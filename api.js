@@ -87,6 +87,48 @@ function sendStatusUpdate(socket, message, progress = null) {
     }
 }
 
+// Função para validar arquivo Excel
+function validateExcelFile(file) {
+    if (!file) {
+        throw new Error('Nenhum arquivo foi enviado');
+    }
+
+    if (file.size > 50 * 1024 * 1024) {
+        throw new Error('O arquivo excede o tamanho máximo permitido de 50MB');
+    }
+
+    const validMimeTypes = [
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel',
+        'application/octet-stream'
+    ];
+
+    if (!validMimeTypes.includes(file.mimetype)) {
+        throw new Error('Formato de arquivo inválido. Apenas arquivos Excel são permitidos');
+    }
+}
+
+// Função para limpar arquivos temporários
+function cleanupTempFiles() {
+    const uploadDir = path.join(__dirname, 'uploads');
+    const outputDir = path.join(__dirname, 'output');
+
+    try {
+        if (fs.existsSync(uploadDir)) {
+            fs.readdirSync(uploadDir).forEach(file => {
+                fs.unlinkSync(path.join(uploadDir, file));
+            });
+        }
+        if (fs.existsSync(outputDir)) {
+            fs.readdirSync(outputDir).forEach(file => {
+                fs.unlinkSync(path.join(outputDir, file));
+            });
+        }
+    } catch (error) {
+        console.error('Erro ao limpar arquivos temporários:', error);
+    }
+}
+
 // Rota para download de arquivos
 app.get('/download/:filename', (req, res) => {
     const filename = req.params.filename;
@@ -104,15 +146,16 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         console.log('Requisição recebida:', req.file);
 
-        if (!req.file) {
-            console.log('Nenhum arquivo encontrado na requisição');
-            return res.status(400).json({ error: 'Nenhum arquivo foi enviado' });
-        }
+        // Validação do arquivo
+        validateExcelFile(req.file);
 
         const inputFile = path.join(__dirname, 'uploads', 'posts.xlsx');
         const outputFile = 'gateways.xlsx';
 
         console.log('Iniciando processamento do arquivo:', inputFile);
+
+        // Limpa arquivos temporários antes de iniciar
+        cleanupTempFiles();
 
         // Inicia o processamento em background
         optimizeGateways(inputFile, outputFile, io)
@@ -127,7 +170,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                 console.error('Erro no processamento:', error);
                 io.emit('processComplete', {
                     success: false,
-                    error: error.message
+                    error: error.message || 'Erro desconhecido durante o processamento'
                 });
             });
 
@@ -139,7 +182,10 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
     } catch (error) {
         console.error('Erro no upload:', error);
-        res.status(500).json({ error: 'Erro no processamento do arquivo: ' + error.message });
+        res.status(400).json({
+            error: 'Erro no processamento do arquivo: ' + error.message,
+            details: error.stack
+        });
     }
 });
 
