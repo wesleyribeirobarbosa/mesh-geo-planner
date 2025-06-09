@@ -342,3 +342,111 @@ O algoritmo segue um processo detalhado para otimizar o posicionamento de gatewa
 - Guttman (1984): "R-trees: A Dynamic Index Structure"
 - Signify Smart Lighting: Práticas de otimização
 - Mapbox Documentation: GeoJSON and Symbol Layers
+
+## Descrição
+
+Este projeto implementa um algoritmo de otimização para posicionamento de gateways em redes mesh, considerando restrições de distância, número máximo de saltos e carga de retransmissão.
+
+## Requisitos
+
+- Node.js (versão 14 ou superior)
+- NPM (gerenciador de pacotes do Node.js)
+
+## Instalação
+
+1. Clone o repositório:
+```bash
+git clone https://github.com/wesleyribeirobarbosa/mesh-geo-planner.git
+cd mesh-geo-planner
+```
+
+2. Instale as dependências:
+```bash
+npm install
+```
+
+## Configuração
+
+### Parâmetros do Algoritmo
+
+O arquivo `config.json` permite configurar os parâmetros do algoritmo:
+
+```json
+{
+    "maxDevicesPerGateway": 250,
+    "maxHops": 15,
+    "hopDistance": 150,
+    "maxGateways": null,
+    "maxIterations": 10,
+    "minGatewayDistance": 300,
+    "maxRelayLoad": 300
+}
+```
+
+### Configuração da Porta da API
+
+Por padrão, a API roda na porta 3000. Para alterar a porta, crie um arquivo `.env` na raiz do projeto e defina a porta desejada:
+
+```env
+PORT=8080
+```
+
+## Uso
+
+### Via API (Recomendado)
+
+1. Inicie o servidor:
+```bash
+npm start
+```
+
+2. O servidor estará disponível em `http://localhost:3000` (ou na porta configurada no arquivo .env)
+
+3. Para fazer o upload do arquivo de postes, envie uma requisição POST para `/upload`:
+   - Método: POST
+   - URL: http://localhost:3000/upload (ou a porta configurada)
+   - Body: form-data
+   - Key: file (tipo: File)
+   - Value: selecione seu arquivo posts.xlsx
+
+**Importante**: Para testes de API com upload de arquivos, recomenda-se usar o Postman Desktop (não o Postman Web) ou cURL:
+
+```bash
+curl -X POST -F "file=@caminho/para/seu/posts.xlsx" http://localhost:3000/upload
+```
+
+### Formato do Arquivo de Entrada
+
+O arquivo de entrada deve ser um arquivo Excel (.xlsx) com as seguintes colunas:
+- id: identificador único do poste
+- lat: latitude do poste
+- lng: longitude do poste
+
+### Saída
+
+O processamento gera três arquivos na pasta `output`:
+1. `gateways.xlsx`: Lista de gateways otimizados
+2. `gateways.geojson`: Visualização dos gateways em formato GeoJSON
+3. `summary.txt`: Resumo do processamento
+
+## Parâmetros de Configuração
+
+- `maxDevicesPerGateway`: Número máximo de dispositivos por gateway
+- `maxHops`: Número máximo de saltos permitidos
+- `hopDistance`: Distância máxima entre saltos (em metros)
+- `maxGateways`: Número máximo de gateways (null para automático)
+- `maxIterations`: Número máximo de iterações do algoritmo
+- `minGatewayDistance`: Distância mínima entre gateways (em metros)
+- `maxRelayLoad`: Carga máxima de retransmissão por nó
+
+## Contribuição
+
+1. Faça um fork do projeto
+2. Crie uma branch para sua feature (`git checkout -b feature/nova-feature`)
+3. Commit suas mudanças (`git commit -m 'Adiciona nova feature'`)
+4. Push para a branch (`git push origin feature/nova-feature`)
+5. Abra um Pull Request
+
+## Licença
+
+Este projeto está licenciado sob a licença MIT - veja o arquivo [LICENSE](LICENSE) para detalhes.

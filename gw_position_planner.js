@@ -550,10 +550,5 @@ async function optimizeGateways(inputFile, outputFile) {
     generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount);
 }
 
-if (isMainThread) {
-    try {
-        optimizeGateways('posts.xlsx', 'gateways.xlsx');
-    } catch (error) {
-        console.error('Erro:', error.message);
-    }
-}
+// Exporta a função para uso na API
+module.exports = { optimizeGateways };
