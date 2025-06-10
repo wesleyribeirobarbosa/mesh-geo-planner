@@ -192,24 +192,40 @@ function App() {
         });
 
         map.current.on('load', () => {
+          // Fonte para postes
+          map.current.addSource('posts', {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] }
+          });
+          // Fonte para gateways
           map.current.addSource('gateways', {
             type: 'geojson',
-            data: {
-              type: 'FeatureCollection',
-              features: []
+            data: { type: 'FeatureCollection', features: [] }
+          });
+
+          // Camada de postes (abaixo)
+          map.current.addLayer({
+            id: 'posts',
+            type: 'circle',
+            source: 'posts',
+            paint: {
+              'circle-color': ['get', 'color'],
+              'circle-radius': 5,
+              'circle-stroke-width': 1,
+              'circle-stroke-color': '#222'
             }
           });
 
-          // Camada de gateways
+          // Camada de gateways (acima)
           map.current.addLayer({
             id: 'gateways',
             type: 'circle',
             source: 'gateways',
             paint: {
-              'circle-color': '#00ff9d',
-              'circle-radius': 8,
+              'circle-color': ['get', 'color'],
+              'circle-radius': 10,
               'circle-stroke-width': 2,
-              'circle-stroke-color': '#ffffff'
+              'circle-stroke-color': '#fff'
             }
           });
 
@@ -231,10 +247,16 @@ function App() {
   useEffect(() => {
     if (map.current && mapData) {
       try {
-        map.current.getSource('gateways').setData(mapData);
-        if (mapData.features.length > 0) {
+        // Separar features
+        const postFeatures = mapData.features.filter(f => f.properties.type === 'post');
+        const gatewayFeatures = mapData.features.filter(f => f.properties.type === 'gateway');
+        map.current.getSource('posts').setData({ type: 'FeatureCollection', features: postFeatures });
+        map.current.getSource('gateways').setData({ type: 'FeatureCollection', features: gatewayFeatures });
+        // Ajustar bounds para todos os pontos
+        const allFeatures = [...postFeatures, ...gatewayFeatures];
+        if (allFeatures.length > 0) {
           const bounds = new mapboxgl.LngLatBounds();
-          mapData.features.forEach(feature => {
+          allFeatures.forEach(feature => {
             bounds.extend(feature.geometry.coordinates);
           });
           map.current.fitBounds(bounds, { padding: 50 });
@@ -350,14 +372,14 @@ function App() {
             py: 2,
             px: 2
           }}>
-            <Typography variant="h1" sx={{
-              fontSize: { xs: '1rem', sm: '1.2rem' },
-              textAlign: 'left',
-              ml: 0,
-              pl: 0
-            }}>
-              Nouvenn RF Planner
-            </Typography>
+            <img
+              src={process.env.PUBLIC_URL + '/mainlogo.png'}
+              alt="Logo"
+              style={{
+                width: 150,
+                marginRight: 12,
+              }}
+            />
             <IconButton
               color="primary"
               onClick={() => setDrawerOpen(!drawerOpen)}

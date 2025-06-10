@@ -374,11 +374,32 @@ function generateSummary(posts, outputData, clusters, config, coordMap, validPos
 
 function generateGeoJSON(posts, medoids, clusters, coordMap) {
     const outputDir = ensureOutputDir();
-    const features = [];
+    const postFeatures = [];
+    const gatewayFeatures = [];
 
+    // Pontos dos postes do arquivo original
+    posts.forEach((post) => {
+        if (post && typeof post.lat === 'number' && typeof post.lng === 'number') {
+            postFeatures.push({
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: [post.lng, post.lat]
+                },
+                properties: {
+                    id: post.id,
+                    type: 'post',
+                    icon: 'post-icon',
+                    color: '#ff4081' // rosa
+                }
+            });
+        }
+    });
+
+    // Gateways (resultantes da análise)
     medoids.forEach((medoid, index) => {
         if (clusters[index].length > 0) {
-            features.push({
+            gatewayFeatures.push({
                 type: 'Feature',
                 geometry: {
                     type: 'Point',
@@ -387,11 +408,15 @@ function generateGeoJSON(posts, medoids, clusters, coordMap) {
                 properties: {
                     id: `C${index + 1}`,
                     type: 'gateway',
-                    icon: 'gateway-icon'
+                    icon: 'gateway-icon',
+                    color: '#00ff9d' // verde
                 }
             });
         }
     });
+
+    // Gateways por último para ficarem acima dos postes
+    const features = [...postFeatures, ...gatewayFeatures];
 
     const geojson = {
         type: 'FeatureCollection',

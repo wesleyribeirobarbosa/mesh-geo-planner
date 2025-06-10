@@ -78,14 +78,11 @@ const upload = multer({
     }
 });
 
-// Função para enviar atualizações de status
-function sendStatusUpdate(socket, message, progress = null) {
-    console.log('Enviando atualização:', { message, progress });
-    socket.emit('status', { message });
-    if (progress !== null) {
-        socket.emit('progress', { progress });
-    }
-}
+// Middleware para limpar arquivos temporários antes do upload
+app.use('/upload', (req, res, next) => {
+    cleanupTempFiles();
+    next();
+});
 
 // Função para validar arquivo Excel
 function validateExcelFile(file) {
@@ -153,9 +150,6 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         const outputFile = 'gateways.xlsx';
 
         console.log('Iniciando processamento do arquivo:', inputFile);
-
-        // Limpa arquivos temporários antes de iniciar
-        cleanupTempFiles();
 
         // Inicia o processamento em background
         optimizeGateways(inputFile, outputFile, io)
