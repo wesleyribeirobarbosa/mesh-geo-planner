@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { uploadFile } from './api';
+import { uploadFile, getConfig, saveConfig } from './api';
 import io from 'socket.io-client';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import './mapbox-popup.css';
 import {
   ThemeProvider,
   createTheme,
@@ -26,7 +27,13 @@ import {
   Tooltip,
   Fade,
   Zoom,
-  LinearProgress
+  LinearProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Switch
 } from '@mui/material';
 import {
   CloudUpload as CloudUploadIcon,
@@ -37,8 +44,10 @@ import {
   Close as CloseIcon,
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
-  Info as InfoIcon
+  Info as InfoIcon,
+  Settings as SettingsIcon
 } from '@mui/icons-material';
+import * as XLSX from 'xlsx';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3091';
 mapboxgl.accessToken = 'pk.eyJ1IjoiZ3VpYWMiLCJhIjoiY2s1eno1dWR4MDJtdDNubDY2NGs3end2MCJ9._HlUjtQpIbTKdyxOuQ0DRA';
@@ -108,6 +117,26 @@ function App() {
   const map = useRef(null);
   const statusEndRef = useRef(null);
   const isMobile = useMediaQuery('(max-width:600px)');
+  const [showOnlyGateways, setShowOnlyGateways] = useState(false);
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [mapConfigData, setMapConfigData] = useState(null);
+  const [configData, setConfigData] = useState(null);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configError, setConfigError] = useState('');
+  const [configSaving, setConfigSaving] = useState(false);
+  const [fileModal, setFileModal] = useState({ open: false, type: '', name: '', content: null, loading: false, error: '' });
+
+  // Dicionário de tooltips para os campos do config
+  const configTooltips = {
+    maxDevicesPerGateway: 'Número máximo de dispositivos por gateway',
+    maxHops: 'Número máximo de saltos permitidos entre dispositivos (postes)',
+    hopDistance: 'Distância máxima entre dispositivos/postes (em metros)',
+    maxGateways: 'Número máximo de gateways (null para automático)',
+    maxIterations: 'Número máximo de iterações do algoritmo. Valores maiores aumentam a precisão da estimativa mas tornam a análise mais lenta',
+    minGatewayDistance: 'Distância mínima entre gateways (em metros)',
+    maxRelayLoad: 'Carga máxima de retransmissão por nó (número máximo de filhos)'
+  };
 
   const scrollToBottom = () => {
     statusEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -231,6 +260,42 @@ function App() {
 
           // Adiciona controle de zoom
           map.current.addControl(new mapboxgl.NavigationControl(), 'bottom-right');
+
+          // Adiciona popups ao clicar nos pontos
+          map.current.on('click', 'posts', (e) => {
+            const feature = e.features[0];
+            const { id } = feature.properties;
+            const [lng, lat] = feature.geometry.coordinates;
+            new mapboxgl.Popup()
+              .setLngLat([lng, lat])
+              .setHTML(`<strong>ID:</strong> ${id}<br/><strong>Coordenadas:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)}`)
+              .addTo(map.current);
+          });
+          map.current.on('click', 'gateways', (e) => {
+            const feature = e.features[0];
+            const { id } = feature.properties;
+            const [lng, lat] = feature.geometry.coordinates;
+            new mapboxgl.Popup()
+              .setLngLat([lng, lat])
+              .setHTML(`<strong>ID:</strong> ${id}<br/><strong>Coordenadas:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)}`)
+              .addTo(map.current);
+          });
+
+          // Cursor pointer ao passar mouse sobre pontos
+          map.current.on('mouseenter', 'posts', () => {
+            map.current.getCanvas().style.cursor = 'pointer';
+          });
+          map.current.on('mouseleave', 'posts', () => {
+            map.current.getCanvas().style.cursor = '';
+          });
+          map.current.on('mouseenter', 'gateways', () => {
+            map.current.getCanvas().style.cursor = 'pointer';
+          });
+          map.current.on('mouseleave', 'gateways', () => {
+            map.current.getCanvas().style.cursor = '';
+          });
+
+          setMapLoaded(true);
         });
 
         map.current.on('error', (e) => {
@@ -338,6 +403,23 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (
+      map.current &&
+      mapLoaded &&
+      map.current.getLayer('posts') &&
+      map.current.getLayer('gateways')
+    ) {
+      if (showOnlyGateways) {
+        map.current.setLayoutProperty('posts', 'visibility', 'none');
+        map.current.setLayoutProperty('gateways', 'visibility', 'visible');
+      } else {
+        map.current.setLayoutProperty('posts', 'visibility', 'visible');
+        map.current.setLayoutProperty('gateways', 'visibility', 'visible');
+      }
+    }
+  }, [showOnlyGateways, mapLoaded]);
+
   const renderStatusIcon = (message) => {
     if (message.includes('Erro') || message.includes('falha')) {
       return <ErrorIcon color="error" />;
@@ -347,6 +429,98 @@ function App() {
     }
     return <InfoIcon color="info" />;
   };
+
+  // Carrega config.json para o box do mapa ao montar e sempre que o mapa for atualizado
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const data = await getConfig();
+        setMapConfigData(data);
+      } catch (err) { }
+    };
+    fetchConfig();
+  }, [mapData]);
+
+  // Funções para modal de configuração
+  const openConfigModal = async () => {
+    setConfigModalOpen(true);
+    setConfigLoading(true);
+    setConfigError('');
+    try {
+      const data = await getConfig();
+      setConfigData(data);
+    } catch (err) {
+      setConfigError(err.message);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const closeConfigModal = () => {
+    setConfigModalOpen(false);
+    setConfigError('');
+  };
+
+  const handleConfigChange = (key, value) => {
+    setConfigData(prev => {
+      // Permite string vazia para campos numéricos
+      if (typeof prev[key] === 'number') {
+        return { ...prev, [key]: value === '' ? '' : value };
+      }
+      return { ...prev, [key]: value };
+    });
+  };
+
+  const handleConfigSave = async () => {
+    setConfigSaving(true);
+    setConfigError('');
+    try {
+      // Converte campos numéricos vazios para null ou número
+      const dataToSave = { ...configData };
+      Object.entries(dataToSave).forEach(([key, value]) => {
+        if (typeof value === 'string' && value.trim() === '' && typeof configData[key] === 'number') {
+          dataToSave[key] = null;
+        } else if (typeof configData[key] === 'number' && typeof value === 'string' && value.trim() !== '') {
+          dataToSave[key] = Number(value);
+        }
+      });
+      await saveConfig(dataToSave);
+      setSnackbar({ open: true, message: 'Configurações salvas com sucesso!', severity: 'success' });
+      setConfigModalOpen(false);
+      // Atualiza o box do mapa após salvar
+      setMapConfigData(dataToSave);
+    } catch (err) {
+      setConfigError(err.message);
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
+  // Função para abrir modal de arquivo gerado
+  const openFileModal = async (type, name) => {
+    setFileModal({ open: true, type, name, content: null, loading: true, error: '' });
+    try {
+      const url = `${API_URL}/download/${name}`;
+      let content = null;
+      if (type === 'xlsx') {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        const data = await blob.arrayBuffer();
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        content = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      } else {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Erro ao carregar arquivo');
+        content = await res.text();
+      }
+      setFileModal({ open: true, type, name, content, loading: false, error: '' });
+    } catch (err) {
+      setFileModal({ open: true, type, name, content: null, loading: false, error: err.message });
+    }
+  };
+
+  const closeFileModal = () => setFileModal({ open: false, type: '', name: '', content: null, loading: false, error: '' });
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -380,6 +554,12 @@ function App() {
                 marginRight: 12,
               }}
             />
+            <Box sx={{ flex: 1 }} />
+            <Tooltip title="Configurações">
+              <IconButton color="primary" onClick={openConfigModal}>
+                <SettingsIcon />
+              </IconButton>
+            </Tooltip>
             <IconButton
               color="primary"
               onClick={() => setDrawerOpen(!drawerOpen)}
@@ -505,31 +685,31 @@ function App() {
                     Arquivos Gerados
                   </Typography>
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <Tooltip title="Baixar Excel com os gateways">
+                    <Tooltip title="Visualizar Excel com os gateways">
                       <Button
                         variant="outlined"
                         startIcon={<TableChartIcon />}
-                        onClick={() => handleDownload(processResult.files.xlsx.name)}
+                        onClick={() => openFileModal('xlsx', processResult.files.xlsx.name)}
                         fullWidth
                       >
                         Excel
                       </Button>
                     </Tooltip>
-                    <Tooltip title="Baixar GeoJSON para visualização">
+                    <Tooltip title="Visualizar GeoJSON para visualização">
                       <Button
                         variant="outlined"
                         startIcon={<MapIcon />}
-                        onClick={() => handleDownload(processResult.files.geojson.name)}
+                        onClick={() => openFileModal('geojson', processResult.files.geojson.name)}
                         fullWidth
                       >
                         GeoJSON
                       </Button>
                     </Tooltip>
-                    <Tooltip title="Baixar resumo da análise">
+                    <Tooltip title="Visualizar resumo da análise">
                       <Button
                         variant="outlined"
                         startIcon={<DescriptionIcon />}
-                        onClick={() => handleDownload(processResult.files.summary.name)}
+                        onClick={() => openFileModal('txt', processResult.files.summary.name)}
                         fullWidth
                       >
                         Resumo
@@ -592,15 +772,6 @@ function App() {
                   <div ref={statusEndRef} />
                 </Box>
               </Paper>
-
-              {uploading && (
-                <Box sx={{ width: '100%', mt: 2 }}>
-                  <LinearProgress variant="determinate" value={progress} />
-                  <Typography variant="body2" color="text.secondary" align="center" sx={{ mt: 1 }}>
-                    {progress}% concluído
-                  </Typography>
-                </Box>
-              )}
             </Box>
           </Paper>
 
@@ -613,6 +784,32 @@ function App() {
               position: 'relative'
             }}
           >
+            {/* Switch Apenas Gateways */}
+            <Box sx={{ position: 'absolute', top: 16, right: 16, zIndex: 10, background: 'rgba(30,30,30,0.8)', borderRadius: 2, p: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="body2" sx={{ mr: 1 }}>Apenas Gateways</Typography>
+              <Switch
+                checked={showOnlyGateways}
+                onChange={e => setShowOnlyGateways(e.target.checked)}
+                color="primary"
+                size="medium"
+              />
+            </Box>
+            {/* Box de configurações no canto inferior esquerdo */}
+            <Box sx={{ position: 'absolute', left: 16, bottom: 16, zIndex: 10, background: 'rgba(30,30,30,0.85)', borderRadius: 2, p: 1.5, minWidth: 180, boxShadow: 2 }}>
+              <Typography variant="caption" sx={{ color: '#00ff9d', fontWeight: 700 }}>Configurações</Typography>
+              <Box sx={{ fontSize: 12, color: '#fff', mt: 0.5 }}>
+                {mapConfigData ? (
+                  Object.entries(mapConfigData).map(([key, value]) => (
+                    <Box key={key} sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                      <span>{key}:</span>
+                      <span style={{ fontWeight: 600 }}>{String(value)}</span>
+                    </Box>
+                  ))
+                ) : (
+                  <span>Carregando...</span>
+                )}
+              </Box>
+            </Box>
             {mapError ? (
               <Paper
                 elevation={0}
@@ -662,6 +859,92 @@ function App() {
             {snackbar.message}
           </Alert>
         </Snackbar>
+
+        {/* Modal de Configurações */}
+        <Dialog open={configModalOpen} onClose={closeConfigModal} maxWidth="xs" fullWidth>
+          <DialogTitle>Configurações do Sistema</DialogTitle>
+          <DialogContent>
+            {configLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 120 }}>
+                <CircularProgress />
+              </Box>
+            ) : configError ? (
+              <Alert severity="error">{configError}</Alert>
+            ) : configData ? (
+              <Box component="form" sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+                {Object.entries(configData).map(([key, value]) => (
+                  <Tooltip key={key} title={configTooltips[key] || key} arrow placement="top">
+                    <TextField
+                      label={key}
+                      value={typeof value === 'number' && value === 0 ? '0' : value === null ? '' : value}
+                      type={typeof configData[key] === 'number' ? 'text' : 'text'}
+                      onChange={e => handleConfigChange(key, e.target.value)}
+                      fullWidth
+                      variant="outlined"
+                      size="small"
+                      sx={{ mb: 1 }}
+                    />
+                  </Tooltip>
+                ))}
+              </Box>
+            ) : null}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeConfigModal} disabled={configSaving}>Cancelar</Button>
+            <Button onClick={handleConfigSave} variant="contained" disabled={configSaving || !configData}>
+              {configSaving ? <CircularProgress size={20} /> : 'Salvar'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Modal de visualização de arquivo */}
+        <Dialog open={fileModal.open} onClose={closeFileModal} maxWidth="md" fullWidth>
+          <DialogTitle>
+            Visualizar arquivo: {fileModal.name}
+          </DialogTitle>
+          <DialogContent dividers sx={{ minHeight: 300 }}>
+            {fileModal.loading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 200 }}>
+                <CircularProgress />
+              </Box>
+            ) : fileModal.error ? (
+              <Alert severity="error">{fileModal.error}</Alert>
+            ) : fileModal.type === 'xlsx' && Array.isArray(fileModal.content) ? (
+              <Box sx={{ overflow: 'auto', maxHeight: 400 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <tbody>
+                    {fileModal.content.map((row, i) => (
+                      <tr key={i}>
+                        {row.map((cell, j) => (
+                          <td key={j} style={{ border: '1px solid #444', padding: 4 }}>{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Box>
+            ) : fileModal.type === 'geojson' && fileModal.content ? (
+              <Box sx={{ whiteSpace: 'pre', fontFamily: 'monospace', fontSize: 13, maxHeight: 400, overflow: 'auto' }}>
+                {fileModal.content}
+              </Box>
+            ) : fileModal.type === 'txt' && fileModal.content ? (
+              <Box sx={{ whiteSpace: 'pre', fontFamily: 'monospace', fontSize: 13, maxHeight: 400, overflow: 'auto' }}>
+                {fileModal.content}
+              </Box>
+            ) : null}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeFileModal}>Fechar</Button>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={() => handleDownload(fileModal.name)}
+              disabled={fileModal.loading || !fileModal.name}
+            >
+              Baixar
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
     </ThemeProvider>
   );

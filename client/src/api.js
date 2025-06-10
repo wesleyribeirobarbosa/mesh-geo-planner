@@ -17,4 +17,20 @@ export const uploadFile = async (file) => {
         console.error('Erro no upload:', error);
         throw new Error(error.response?.data?.error || 'Erro ao fazer upload do arquivo');
     }
-}; 
+};
+
+export async function getConfig() {
+    const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:3091'}/config`);
+    if (!response.ok) throw new Error('Erro ao buscar configurações');
+    return response.json();
+}
+
+export async function saveConfig(config) {
+    const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:3091'}/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+    });
+    if (!response.ok) throw new Error('Erro ao salvar configurações');
+    return response.json();
+} 

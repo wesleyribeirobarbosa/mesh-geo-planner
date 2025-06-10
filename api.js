@@ -138,6 +138,31 @@ app.get('/download/:filename', (req, res) => {
     res.download(filePath);
 });
 
+// Endpoint para obter o config.json
+app.get('/config', (req, res) => {
+    const configPath = path.join(__dirname, 'config.json');
+    if (!fs.existsSync(configPath)) {
+        return res.status(404).json({ error: 'Arquivo de configuração não encontrado' });
+    }
+    try {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        res.json(config);
+    } catch (err) {
+        res.status(500).json({ error: 'Erro ao ler o arquivo de configuração', details: err.message });
+    }
+});
+
+// Endpoint para atualizar o config.json
+app.post('/config', express.json(), (req, res) => {
+    const configPath = path.join(__dirname, 'config.json');
+    try {
+        fs.writeFileSync(configPath, JSON.stringify(req.body, null, 2));
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Erro ao salvar o arquivo de configuração', details: err.message });
+    }
+});
+
 // Rota para upload do arquivo
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {

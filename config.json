@@ -1,9 +1,9 @@
 {
-    "maxDevicesPerGateway": 250,
-    "maxHops": 15,
-    "hopDistance": 150,
-    "maxGateways": null,
-    "maxIterations": 10,
-    "minGatewayDistance": 1000,
-    "maxRelayLoad": 30
+  "maxDevicesPerGateway": "300",
+  "maxHops": 15,
+  "hopDistance": "150",
+  "maxGateways": null,
+  "maxIterations": "20",
+  "minGatewayDistance": "1000",
+  "maxRelayLoad": "20"
 }

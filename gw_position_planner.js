@@ -152,7 +152,7 @@ if (!isMainThread) {
     process.exit();
 }
 
-function kMedoids(posts, k, config) {
+function kMedoids(posts, k, config, sendStatus = () => { }) {
     console.log(`Iniciando K-Medoids com ${k} clusters...`);
     console.log('Selecionando medoides iniciais (k-means++)...');
     const medoids = [];
@@ -168,8 +168,9 @@ function kMedoids(posts, k, config) {
     console.log(`Medoide inicial selecionado: ID ${initialMedoid.id}, Lat ${initialMedoid.lat}, Lng ${initialMedoid.lng}`);
     medoids.push(initialMedoid);
 
-    for (let i = 1; i < k; i++) {
-        console.log(`Selecionando medoide ${i + 1}/${k}...`);
+    let actualK = k;
+    for (let i = 1; i < actualK; i++) {
+        console.log(`Selecionando medoide ${i + 1}/${actualK}...`);
         const distances = validPosts.map((post, index) => {
             if (!post || typeof post.lat !== 'number' || typeof post.lng !== 'number') {
                 console.warn(`Poste inválido no índice ${index} durante inicialização k-means++. Ignorando...`);
@@ -184,19 +185,26 @@ function kMedoids(posts, k, config) {
         }).filter(d => d.dist !== Infinity);
 
         if (distances.length === 0) {
-            throw new Error(`Nenhum poste válido com distância finita para medoide ${i + 1}/${k} respeitando a distância mínima de ${config.minGatewayDistance}m. Considere reduzir minGatewayDistance ou aumentar maxGateways.`);
+            // Reduz k automaticamente e avisa
+            actualK = i;
+            sendStatus(`Não foi possível selecionar medoide ${i + 1}. Reduzindo automaticamente o número de gateways para ${actualK} para respeitar a distância mínima de ${config.minGatewayDistance}m.`);
+            console.warn(`Reduzindo automaticamente o número de gateways para ${actualK} para respeitar a distância mínima.`);
+            break;
         }
 
         const total = distances.reduce((sum, d) => sum + d.dist, 0);
         let selectedPost = null;
         if (total === 0) {
-            console.warn(`Distância total é zero para medoide ${i + 1}/${k}. Possíveis coordenadas duplicadas. Selecionando poste aleatório...`);
+            console.warn(`Distância total é zero para medoide ${i + 1}/${actualK}. Possíveis coordenadas duplicadas. Selecionando poste aleatório...`);
             const validCandidates = validPosts.filter(post =>
                 Math.min(...medoids.map(medoid =>
                     haversineDistance(post.lat, post.lng, medoid.lat, medoid.lng))) >= config.minGatewayDistance
             );
             if (validCandidates.length === 0) {
-                throw new Error(`Nenhum candidato válido para medoide ${i + 1}/${k} respeitando a distância mínima de ${config.minGatewayDistance}m. Considere reduzir minGatewayDistance ou aumentar maxGateways.`);
+                actualK = i;
+                sendStatus(`Não foi possível selecionar medoide ${i + 1}. Reduzindo automaticamente o número de gateways para ${actualK} para respeitar a distância mínima de ${config.minGatewayDistance}m.`);
+                console.warn(`Reduzindo automaticamente o número de gateways para ${actualK} para respeitar a distância mínima.`);
+                break;
             }
             selectedPost = validCandidates[Math.floor(Math.random() * validCandidates.length)];
         } else {
@@ -210,13 +218,16 @@ function kMedoids(posts, k, config) {
                 }
             }
             if (!selectedPost && distances.length > 0) {
-                console.warn(`Falha na seleção por soma de distâncias para medoide ${i + 1}/${k}. Usando último poste válido.`);
+                console.warn(`Falha na seleção por soma de distâncias para medoide ${i + 1}/${actualK}. Usando último poste válido.`);
                 selectedPost = distances[distances.length - 1].post;
             }
         }
 
         if (!selectedPost) {
-            throw new Error(`Falha ao selecionar medoide ${i + 1}/${k}: nenhum poste válido encontrado.`);
+            actualK = i;
+            sendStatus(`Não foi possível selecionar medoide ${i + 1}. Reduzindo automaticamente o número de gateways para ${actualK} para respeitar a distância mínima de ${config.minGatewayDistance}m.`);
+            console.warn(`Reduzindo automaticamente o número de gateways para ${actualK} para respeitar a distância mínima.`);
+            break;
         }
         console.log(`Medoide ${i + 1} selecionado: ID ${selectedPost.id}, Lat ${selectedPost.lat}, Lng ${selectedPost.lng}`);
         medoids.push(selectedPost);
@@ -231,8 +242,8 @@ function kMedoids(posts, k, config) {
         console.log(`K-Medoids: Iniciando iteração ${iteration}...`);
         changed = false;
 
-        clusters = Array(k).fill().map(() => []);
-        const clusterSizes = Array(k).fill(0);
+        clusters = Array(medoids.length).fill().map(() => []);
+        const clusterSizes = Array(medoids.length).fill(0);
         const tree = buildSpatialIndex(validPosts);
         const unassignedPosts = [];
 
@@ -246,7 +257,7 @@ function kMedoids(posts, k, config) {
             }
             let minDist = Infinity;
             let closestMedoid = -1;
-            for (let i = 0; i < k; i++) {
+            for (let i = 0; i < medoids.length; i++) {
                 if (clusterSizes[i] >= config.maxDevicesPerGateway) continue;
                 const dist = haversineDistance(post.lat, post.lng, medoids[i].lat, medoids[i].lng);
                 if (dist < minDist) {
@@ -267,9 +278,9 @@ function kMedoids(posts, k, config) {
         }
         console.log('Atribuição de postes concluída.');
 
-        for (let i = 0; i < k; i++) {
+        for (let i = 0; i < medoids.length; i++) {
             if (clusters[i].length === 0) continue;
-            console.log(`Atualizando medoide do cluster ${i + 1}/${k}...`);
+            console.log(`Atualizando medoide do cluster ${i + 1}/${medoids.length}...`);
             let minTotalDist = Infinity;
             let newMedoid = medoids[i];
             for (const candidate of clusters[i]) {
@@ -313,7 +324,7 @@ function ensureOutputDir() {
     return outputDir;
 }
 
-function generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount) {
+function generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount, extraAlerts = []) {
     const outputDir = ensureOutputDir();
     const summary = [];
     const totalPosts = posts.length;
@@ -362,9 +373,10 @@ function generateSummary(posts, outputData, clusters, config, coordMap, validPos
         alerts.push(`Existem ${unassignedPostsCount} postes não atribuídos, indicando possível necessidade de mais gateways ou ajustes na configuração.`);
     }
 
-    if (alerts.length > 0) {
+    if (alerts.length > 0 || extraAlerts.length > 0) {
         summary.push(`Alertas:`);
         alerts.forEach(alert => summary.push(`  ${alert}`));
+        extraAlerts.forEach(alert => summary.push(`  ${alert}`));
     }
 
     fs.writeFileSync(path.join(outputDir, 'summary.txt'), summary.join('\n'));
@@ -426,6 +438,36 @@ function generateGeoJSON(posts, medoids, clusters, coordMap) {
     fs.writeFileSync(path.join(outputDir, 'gateways.geojson'), JSON.stringify(geojson, null, 2));
     console.log('Arquivo GeoJSON gerado: output/gateways.geojson');
     return path.join(outputDir, 'gateways.geojson');
+}
+
+// Função para detectar outliers (postes muito isolados)
+function detectOutliers(posts, minGatewayDistance) {
+    // Calcula a menor distância de cada poste para qualquer outro
+    const distances = posts.map((post, i) => {
+        let minDist = Infinity;
+        for (let j = 0; j < posts.length; j++) {
+            if (i === j) continue;
+            const dist = haversineDistance(post.lat, post.lng, posts[j].lat, posts[j].lng);
+            if (dist < minDist) minDist = dist;
+        }
+        return minDist;
+    });
+
+    // Critério: outlier se a menor distância for muito maior que a média/mediana
+    const sorted = distances.slice().sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const mean = distances.reduce((a, b) => a + b, 0) / distances.length;
+    const std = Math.sqrt(distances.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / distances.length);
+
+    // Critério: maior que mediana + 3*std OU maior que minGatewayDistance*2
+    const outlierIndexes = [];
+    distances.forEach((d, i) => {
+        if (d > Math.max(median + 3 * std, minGatewayDistance * 2)) {
+            outlierIndexes.push(i);
+        }
+    });
+
+    return outlierIndexes.map(i => ({ ...posts[i], minDist: distances[i] }));
 }
 
 async function optimizeGateways(inputFile, outputFile, io) {
@@ -505,16 +547,30 @@ async function optimizeGateways(inputFile, outputFile, io) {
         }
         sendStatus(`Selecionados ${validPosts.length} postes válidos com coordenadas únicas.`);
 
-        let k = config.maxGateways || Math.ceil(validPostsCount / config.maxDevicesPerGateway);
-        sendStatus(`Estimando número inicial de gateways: ${k} (baseado em ${validPostsCount} postes válidos)`);
+        // Detecta e remove outliers automaticamente
+        sendStatus('Detectando postes isolados (outliers)...');
+        const outliers = detectOutliers(validPosts, config.minGatewayDistance);
+        if (outliers.length > 0) {
+            sendStatus(`${outliers.length} postes isolados detectados e removidos automaticamente. Veja detalhes em output/outliers.txt`);
+            // Salva relatório dos outliers
+            const outlierReport = outliers.map(o => `ID: ${o.id}, lat: ${o.lat}, lng: ${o.lng}, minDist: ${o.minDist.toFixed(2)}m`).join('\n');
+            fs.writeFileSync(path.join(outputDir, 'outliers.txt'), outlierReport);
+        }
+        const filteredPosts = validPosts.filter(p => !outliers.some(o => o.id === p.id));
+        if (filteredPosts.length === 0) {
+            throw new Error('Todos os postes foram considerados outliers. Ajuste os parâmetros de configuração.');
+        }
 
-        const dynamicMaxDevices = config.maxGateways ? Math.ceil(validPosts.length / config.maxGateways) : config.maxDevicesPerGateway;
+        let k = config.maxGateways || Math.ceil(filteredPosts.length / config.maxDevicesPerGateway);
+        sendStatus(`Estimando número inicial de gateways: ${k} (baseado em ${filteredPosts.length} postes válidos)`);
+
+        const dynamicMaxDevices = config.maxGateways ? Math.ceil(filteredPosts.length / config.maxGateways) : config.maxDevicesPerGateway;
         if (dynamicMaxDevices > config.maxDevicesPerGateway) {
-            sendStatus(`Ajustando número máximo de dispositivos por gateway para ${dynamicMaxDevices} para acomodar ${validPosts.length} postes.`);
+            sendStatus(`Ajustando número máximo de dispositivos por gateway para ${dynamicMaxDevices} para acomodar ${filteredPosts.length} postes.`);
         }
 
         sendStatus('Iniciando algoritmo K-Medoids...');
-        let { medoids, clusters } = kMedoids(validPosts, k, config);
+        let { medoids, clusters } = kMedoids(filteredPosts, k, config, sendStatus);
         sendStatus('K-Medoids concluído.');
 
         sendStatus('Verificando restrições de capacidade, saltos e carga de retransmissão...');
@@ -550,7 +606,7 @@ async function optimizeGateways(inputFile, outputFile, io) {
                     if (!config.maxGateways || k < config.maxGateways) {
                         sendStatus(`Aumentando número de gateways para ${k + 1}...`);
                         k++;
-                        ({ medoids, clusters } = kMedoids(validPosts, k, config));
+                        ({ medoids, clusters } = kMedoids(filteredPosts, k, config, sendStatus));
                         valid = false;
                         break;
                     } else {
@@ -583,7 +639,12 @@ async function optimizeGateways(inputFile, outputFile, io) {
         const geojsonPath = generateGeoJSON(posts, medoids, clusters, coordMap);
 
         sendStatus('Gerando arquivo de resumo...');
-        const summaryPath = generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount);
+        // Detecta se houve redução automática de gateways
+        let extraAlerts = [];
+        if (medoids.length < k) {
+            extraAlerts.push(`O número de gateways foi reduzido automaticamente para ${medoids.length} para respeitar a distância mínima de ${config.minGatewayDistance}m entre gateways.`);
+        }
+        const summaryPath = generateSummary(posts, outputData, clusters, config, coordMap, validPostsCount, extraAlerts);
 
         sendStatus('Processamento concluído com sucesso!');
 
