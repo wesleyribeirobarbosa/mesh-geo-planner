@@ -2,11 +2,14 @@
   "name": "mesh-geo-planner",
   "version": "1.0.0",
   "description": "Otimização de Posicionamento de Concentradores para Redes Mesh",
-  "main": "api.js",
+  "main": "main.js",
   "scripts": {
-    "start": "node api.js",
-    "client": "cd client && npm start",
-    "dev": "concurrently \"npm run start\" \"npm run client\""
+    "postinstall": "cd client && npm install",
+    "build:react": "cd client && npm run build",
+    "start": "electron .",
+    "dev": "concurrently \"npm run electron:dev\" \"npm run client\"",
+    "electron:dev": "electron .",
+    "dist": "npm run build:react && electron-builder"
   },
   "repository": {
     "type": "git",
@@ -30,6 +33,28 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "electron": "^29.4.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.suaempresa.meshgeoplanner",
+    "productName": "MeshGeoPlanner",
+    "files": [
+      "main.js",
+      "api.js",
+      "gw_position_planner.js",
+      "config.json",
+      "output/**/*",
+      "uploads/**/*",
+      "client/build/**/*",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "buildResources": "assets"
+    },
+    "win": {
+      "target": "nsis"
+    }
   }
 }
