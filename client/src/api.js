@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3091';
+const API_URL = 'http://localhost:3091';
 
 export const uploadFile = async (file) => {
     const formData = new FormData();
@@ -20,13 +20,13 @@ export const uploadFile = async (file) => {
 };
 
 export async function getConfig() {
-    const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:3091'}/config`);
+    const response = await fetch(`${API_URL}/config`);
     if (!response.ok) throw new Error('Erro ao buscar configurações');
     return response.json();
 }
 
 export async function saveConfig(config) {
-    const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:3091'}/config`, {
+    const response = await fetch(`${API_URL}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config)

@@ -11,8 +11,8 @@ const { optimizeGateways } = require('./gw_position_planner');
 const app = express();
 const httpServer = createServer(app);
 
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3092';
-const PORT = process.env.PORT || 3000;
+const CLIENT_URL = 'http://localhost:3092';
+const PORT = 3091;
 
 console.log('Configuração do servidor:');
 console.log('CLIENT_URL:', CLIENT_URL);

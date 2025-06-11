@@ -49,7 +49,7 @@ import {
 } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3091';
+const API_URL = 'http://localhost:3091';
 mapboxgl.accessToken = 'pk.eyJ1IjoiZ3VpYWMiLCJhIjoiY2s1eno1dWR4MDJtdDNubDY2NGs3end2MCJ9._HlUjtQpIbTKdyxOuQ0DRA';
 
 // Tema dark personalizado
