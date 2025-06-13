@@ -57,7 +57,9 @@ const storage = multer.diskStorage({
     },
     filename: function (req, file, cb) {
         console.log('Arquivo recebido:', file.originalname);
-        cb(null, 'posts.xlsx');
+        // Define o nome do arquivo baseado no campo
+        const filename = file.fieldname === 'existingGateways' ? 'existing_gateways.xlsx' : 'posts.xlsx';
+        cb(null, filename);
     }
 });
 
@@ -164,20 +166,32 @@ app.post('/config', express.json(), (req, res) => {
 });
 
 // Rota para upload do arquivo
-app.post('/upload', upload.single('file'), async (req, res) => {
+app.post('/upload', upload.fields([
+    { name: 'file', maxCount: 1 },
+    { name: 'existingGateways', maxCount: 1 }
+]), async (req, res) => {
     try {
-        console.log('Requisição recebida:', req.file);
+        console.log('Requisição recebida:', req.files);
 
-        // Validação do arquivo
-        validateExcelFile(req.file);
+        // Validação do arquivo principal
+        if (!req.files || !req.files.file || !req.files.file[0]) {
+            throw new Error('Nenhum arquivo foi enviado');
+        }
+
+        validateExcelFile(req.files.file[0]);
 
         const inputFile = path.join(__dirname, 'uploads', 'posts.xlsx');
+        const existingGatewaysFile = req.files.existingGateways ?
+            path.join(__dirname, 'uploads', 'existing_gateways.xlsx') : null;
         const outputFile = 'gateways.xlsx';
 
         console.log('Iniciando processamento do arquivo:', inputFile);
+        if (existingGatewaysFile) {
+            console.log('Arquivo de gateways existentes:', existingGatewaysFile);
+        }
 
         // Inicia o processamento em background
-        optimizeGateways(inputFile, outputFile, io)
+        optimizeGateways(inputFile, outputFile, io, existingGatewaysFile)
             .then((result) => {
                 console.log('Processamento concluído com sucesso');
                 io.emit('processComplete', {
@@ -195,8 +209,9 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
         res.status(200).json({
             message: 'Arquivo recebido e processamento iniciado',
-            filename: req.file.originalname,
-            size: req.file.size
+            filename: req.files.file[0].originalname,
+            size: req.files.file[0].size,
+            hasExistingGateways: !!req.files.existingGateways
         });
 
     } catch (error) {

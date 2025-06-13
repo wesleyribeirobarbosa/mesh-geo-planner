@@ -104,6 +104,7 @@ const darkTheme = createTheme({
 
 function App() {
   const [file, setFile] = useState(null);
+  const [existingGatewaysFile, setExistingGatewaysFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [statusHistory, setStatusHistory] = useState([]);
@@ -161,6 +162,18 @@ function App() {
     }
   };
 
+  const handleExistingGatewaysChange = (e) => {
+    const selectedFile = e.target.files[0];
+    if (selectedFile) {
+      setExistingGatewaysFile(selectedFile);
+      setSnackbar({
+        open: true,
+        message: 'Arquivo de gateways existentes selecionado com sucesso!',
+        severity: 'success'
+      });
+    }
+  };
+
   const handleUpload = async () => {
     if (!file) {
       setError('Por favor, selecione um arquivo');
@@ -175,8 +188,30 @@ function App() {
     setMapError(null);
 
     try {
-      const response = await uploadFile(file);
-      console.log('Upload response:', response);
+      const formData = new FormData();
+      formData.append('file', file);
+      if (existingGatewaysFile) {
+        formData.append('existingGateways', existingGatewaysFile);
+      }
+
+      // Log para debug
+      console.log('Enviando arquivos:', {
+        file: file.name,
+        existingGateways: existingGatewaysFile ? existingGatewaysFile.name : 'não fornecido'
+      });
+
+      const response = await fetch(`${API_URL}/upload`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Erro ao fazer upload do arquivo');
+      }
+
+      const data = await response.json();
+      console.log('Upload response:', data);
     } catch (err) {
       console.error('Upload error:', err);
       setError(err.message || 'Erro ao fazer upload do arquivo');
@@ -195,8 +230,13 @@ function App() {
 
   const loadGeoJSON = async (filename) => {
     try {
+      console.log('Carregando GeoJSON:', filename);
       const response = await fetch(`${API_URL}/download/${filename}`);
+      if (!response.ok) {
+        throw new Error(`Erro ao carregar GeoJSON: ${response.statusText}`);
+      }
       const data = await response.json();
+      console.log('GeoJSON carregado:', data);
       setMapData(data);
     } catch (error) {
       console.error('Erro ao carregar GeoJSON:', error);
@@ -212,6 +252,7 @@ function App() {
   useEffect(() => {
     if (mapContainer.current && !map.current) {
       try {
+        console.log('Inicializando mapa...');
         map.current = new mapboxgl.Map({
           container: mapContainer.current,
           style: 'mapbox://styles/mapbox/dark-v11',
@@ -221,6 +262,7 @@ function App() {
         });
 
         map.current.on('load', () => {
+          console.log('Mapa carregado, adicionando camadas...');
           // Fonte para postes
           map.current.addSource('posts', {
             type: 'geojson',
@@ -251,7 +293,12 @@ function App() {
             type: 'circle',
             source: 'gateways',
             paint: {
-              'circle-color': ['get', 'color'],
+              'circle-color': [
+                'case',
+                ['get', 'isFixed'],
+                '#ffeb3b', // amarelo para gateways existentes
+                '#00ff9d'  // verde para novos gateways
+              ],
               'circle-radius': 10,
               'circle-stroke-width': 2,
               'circle-stroke-color': '#fff'
@@ -271,13 +318,18 @@ function App() {
               .setHTML(`<strong>ID:</strong> ${id}<br/><strong>Coordenadas:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)}`)
               .addTo(map.current);
           });
+
           map.current.on('click', 'gateways', (e) => {
             const feature = e.features[0];
-            const { id } = feature.properties;
+            const { id, isFixed } = feature.properties;
             const [lng, lat] = feature.geometry.coordinates;
             new mapboxgl.Popup()
               .setLngLat([lng, lat])
-              .setHTML(`<strong>ID:</strong> ${id}<br/><strong>Coordenadas:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)}`)
+              .setHTML(`
+                <strong>ID:</strong> ${id}<br/>
+                <strong>Coordenadas:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)}<br/>
+                <strong>Status:</strong> ${isFixed ? 'Gateway Existente' : 'Novo Gateway'}
+              `)
               .addTo(map.current);
           });
 
@@ -296,6 +348,7 @@ function App() {
           });
 
           setMapLoaded(true);
+          console.log('Camadas do mapa adicionadas com sucesso');
         });
 
         map.current.on('error', (e) => {
@@ -312,11 +365,25 @@ function App() {
   useEffect(() => {
     if (map.current && mapData) {
       try {
+        console.log('Atualizando mapa com dados:', mapData);
         // Separar features
         const postFeatures = mapData.features.filter(f => f.properties.type === 'post');
         const gatewayFeatures = mapData.features.filter(f => f.properties.type === 'gateway');
-        map.current.getSource('posts').setData({ type: 'FeatureCollection', features: postFeatures });
-        map.current.getSource('gateways').setData({ type: 'FeatureCollection', features: gatewayFeatures });
+
+        console.log('Features encontradas:', {
+          posts: postFeatures.length,
+          gateways: gatewayFeatures.length,
+          gatewaysExistentes: gatewayFeatures.filter(f => f.properties.isFixed).length
+        });
+
+        // Atualiza as fontes de dados
+        if (map.current.getSource('posts')) {
+          map.current.getSource('posts').setData({ type: 'FeatureCollection', features: postFeatures });
+        }
+        if (map.current.getSource('gateways')) {
+          map.current.getSource('gateways').setData({ type: 'FeatureCollection', features: gatewayFeatures });
+        }
+
         // Ajustar bounds para todos os pontos
         const allFeatures = [...postFeatures, ...gatewayFeatures];
         if (allFeatures.length > 0) {
@@ -653,9 +720,31 @@ function App() {
                     disabled={uploading}
                     sx={{ mb: 2 }}
                   >
-                    {file ? file.name : 'Selecionar Arquivo'}
+                    {file ? file.name : 'Selecionar Arquivo de Postes'}
                   </Button>
                 </label>
+
+                <input
+                  type="file"
+                  onChange={handleExistingGatewaysChange}
+                  accept=".xlsx"
+                  disabled={uploading}
+                  id="existing-gateways-input"
+                  style={{ display: 'none' }}
+                />
+                <label htmlFor="existing-gateways-input">
+                  <Button
+                    component="span"
+                    variant="outlined"
+                    fullWidth
+                    startIcon={<CloudUploadIcon />}
+                    disabled={uploading}
+                    sx={{ mb: 2 }}
+                  >
+                    {existingGatewaysFile ? existingGatewaysFile.name : 'Selecionar Gateways Existentes (Opcional)'}
+                  </Button>
+                </label>
+
                 <Button
                   variant="contained"
                   fullWidth
